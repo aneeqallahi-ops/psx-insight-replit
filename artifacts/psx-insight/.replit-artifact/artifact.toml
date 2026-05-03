@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "PSX Insight"
+version = "1.0.0"
+id = "artifacts/psx-insight"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20764
+
+[services.development]
+run = "pnpm --filter @workspace/psx-insight run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/psx-insight", "run", "build" ]
+publicDir = "artifacts/psx-insight/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20764"
+BASE_PATH = "/"

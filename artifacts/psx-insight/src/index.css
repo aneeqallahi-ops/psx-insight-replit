@@ -1,0 +1,98 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme inline {
+  --color-canvas: #0a0a0a;
+  --color-panel: #0f0f0f;
+  --color-line: rgba(255, 79, 58, 0.22);
+  --color-coral: #FF4F3A;
+
+  --font-sans: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-display: 'Anton', 'Archivo Black', sans-serif;
+  --radius-sm: 0px;
+  --radius: 0px;
+  --radius-lg: 0px;
+}
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: #0a0a0a;
+    color: #d1d5db;
+    line-height: 1.5;
+    margin: 0;
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    background-size: 40px 40px;
+    background-attachment: fixed;
+  }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0a0a0a; }
+  ::-webkit-scrollbar-thumb { background: #333; border-radius: 0; }
+  ::-webkit-scrollbar-thumb:hover { background: #FF4F3A; }
+
+  ::selection { background: #FF4F3A; color: #0a0a0a; }
+
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button { opacity: 0.4; }
+
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: invert(0.7);
+    cursor: pointer;
+  }
+}
+
+@layer utilities {
+  .bg-canvas { background-color: #0a0a0a; }
+  .bg-panel { background-color: #0f0f0f; }
+  .border-line { border-color: rgba(255, 79, 58, 0.22); }
+  .text-line { color: rgba(255, 79, 58, 0.22); }
+
+  .text-coral { color: #FF4F3A; }
+  .bg-coral { background-color: #FF4F3A; }
+  .border-coral { border-color: #FF4F3A; }
+  .bg-coral\/10 { background-color: rgba(255, 79, 58, 0.10); }
+  .bg-coral\/15 { background-color: rgba(255, 79, 58, 0.15); }
+  .bg-coral\/5 { background-color: rgba(255, 79, 58, 0.05); }
+  .border-coral\/30 { border-color: rgba(255, 79, 58, 0.30); }
+  .border-coral\/50 { border-color: rgba(255, 79, 58, 0.50); }
+  .border-coral\/60 { border-color: rgba(255, 79, 58, 0.60); }
+  .hover\:bg-coral\/10:hover { background-color: rgba(255, 79, 58, 0.10); }
+  .hover\:bg-coral\/20:hover { background-color: rgba(255, 79, 58, 0.20); }
+  .hover\:text-coral:hover { color: #FF4F3A; }
+  .hover\:border-coral:hover { border-color: #FF4F3A; }
+  .hover\:border-coral\/60:hover { border-color: rgba(255, 79, 58, 0.60); }
+
+  .font-display {
+    font-family: 'Anton', 'Archivo Black', sans-serif;
+    letter-spacing: 0.02em;
+  }
+  .font-mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+
+  .clip-notch {
+    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  }
+
+  @keyframes psx-marquee {
+    0% { transform: translateX(0%); }
+    100% { transform: translateX(-50%); }
+  }
+  .animate-marquee {
+    display: inline-block;
+    white-space: nowrap;
+    animation: psx-marquee 45s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-marquee { animation: none; }
+  }
+}
