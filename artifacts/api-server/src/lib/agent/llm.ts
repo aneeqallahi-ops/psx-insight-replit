@@ -3,6 +3,12 @@ import pRetry, { AbortError } from 'p-retry';
 import { logger } from '../logger';
 
 const MODEL = 'claude-sonnet-4-6';
+// Cheap, fast model for the three analyst legs (technical, fundamental, news).
+// Each leg consumes structured prompts and emits a small fixed-shape JSON; that
+// is squarely in Haiku's wheelhouse and roughly halves cost vs. Sonnet.
+// The synthesizer keeps the default Sonnet model because it must weigh three
+// signals and write nuanced rationale.
+export const ANALYST_MODEL = 'claude-haiku-4-5-20251001';
 const MAX_TOKENS = 8192;
 const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_CALLS_PER_MINUTE = 10;
@@ -60,6 +66,7 @@ export interface AnalyzeOptions {
   system?: string;
   maxTokens?: number;
   signal?: AbortSignal;
+  model?: string;
 }
 
 export async function analyze(prompt: string, options: AnalyzeOptions = {}): Promise<string> {
@@ -74,7 +81,7 @@ export async function analyze(prompt: string, options: AnalyzeOptions = {}): Pro
         const message = await withTimeout(
           anthropic.messages.create(
             {
-              model: MODEL,
+              model: options.model ?? MODEL,
               max_tokens: options.maxTokens ?? MAX_TOKENS,
               system: buildSystem(options.system),
               messages: [{ role: 'user', content: prompt }],
@@ -128,7 +135,7 @@ export async function analyzeStream(
       if (options.signal?.aborted) throw new AbortError('Aborted before retry');
 
       const stream = anthropic.messages.stream({
-        model: MODEL,
+        model: options.model ?? MODEL,
         max_tokens: options.maxTokens ?? MAX_TOKENS,
         system: buildSystem(options.system),
         messages: [{ role: 'user', content: prompt }],

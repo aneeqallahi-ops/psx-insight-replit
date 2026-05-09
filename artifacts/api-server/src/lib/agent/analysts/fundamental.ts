@@ -1,5 +1,5 @@
 import { PSXApi } from '../../psx-api';
-import { analyze, extractJson } from '../llm';
+import { analyze, extractJson, ANALYST_MODEL } from '../llm';
 import type { Citation } from '../types';
 import type { AnalystReport } from './technical';
 
@@ -48,7 +48,7 @@ ${company ? `Business description (truncated): ${(company.businessDescription ||
 
 Write a fundamental analysis JSON note for ${symbol}. Anchor commentary in the numbers. Call out valuation, payout, and balance-sheet/sector signals.`;
 
-  const text = await analyze(prompt, { system: SYSTEM, signal });
+  const text = await analyze(prompt, { system: SYSTEM, signal, model: ANALYST_MODEL });
   const parsed = extractJson<{ summary: string; signals: string[]; confidence: number }>(text);
 
   return {

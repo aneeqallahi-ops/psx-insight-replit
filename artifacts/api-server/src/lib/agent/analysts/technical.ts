@@ -1,6 +1,6 @@
 import { PSXApi } from '../../psx-api';
 import { computeIndicators } from '../indicators';
-import { analyze, extractJson } from '../llm';
+import { analyze, extractJson, ANALYST_MODEL } from '../llm';
 import type { Citation } from '../types';
 
 export interface AnalystReport {
@@ -59,7 +59,7 @@ MACD: ${indicators.macd ? `line ${indicators.macd.macd.toFixed(3)}, signal ${ind
 
 Write a technical analysis JSON note for ${symbol}. Reference the indicators by name. Avoid hedging language unless data is genuinely mixed.`;
 
-  const text = await analyze(prompt, { system: SYSTEM, signal });
+  const text = await analyze(prompt, { system: SYSTEM, signal, model: ANALYST_MODEL });
   const parsed = extractJson<{ summary: string; signals: string[]; confidence: number }>(text);
 
   return {

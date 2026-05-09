@@ -310,6 +310,73 @@ export async function getNewsWithRefresh() {
   return pruneArticles(store.articles);
 }
 
+const GOOGLE_NEWS_RSS_BASE = 'https://news.google.com/rss/search';
+const GOOGLE_NEWS_MAX_ITEMS = 10;
+
+// Last-resort fallback when the Mettis cache has no articles tagged with the
+// requested symbol. Hits Google News' Pakistan English edition over RSS, which
+// indexes Business Recorder, Dawn, The News, ARY Business, etc. No API key.
+export async function searchGoogleNewsForSymbol(symbol: string): Promise<NewsArticle[]> {
+  const query = `${symbol} PSX Pakistan stock`;
+  const url = `${GOOGLE_NEWS_RSS_BASE}?q=${encodeURIComponent(query)}&hl=en-PK&gl=PK&ceid=PK:en`;
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/rss+xml, application/xml, text/xml',
+        'User-Agent': 'Mozilla/5.0 (compatible; PSX-Insight/1.0)',
+      },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    return parseGoogleNewsRSS(xml, symbol).slice(0, GOOGLE_NEWS_MAX_ITEMS);
+  } catch {
+    return [];
+  }
+}
+
+function parseGoogleNewsRSS(xml: string, symbol: string): NewsArticle[] {
+  const $ = cheerio.load(xml, { xmlMode: true });
+  const articles: NewsArticle[] = [];
+
+  $('item').each((_, el) => {
+    const item = $(el);
+    const rawTitle = normalizeText(item.find('title').first().text());
+    const link = normalizeText(item.find('link').first().text());
+    if (!rawTitle || !link) return;
+
+    const pubDateRaw = normalizeText(item.find('pubDate').first().text());
+    const sourceName = normalizeText(item.find('source').first().text()) || 'Google News';
+    const descRaw = item.find('description').first().text();
+
+    // Google embeds an HTML snippet inside <description>. Strip tags for the body.
+    const descText = normalizeText(cheerio.load(`<root>${descRaw}</root>`).root().text());
+
+    // Google News titles arrive as "Headline - Source"; strip the trailing source
+    const headline = rawTitle.replace(/\s+-\s+[^-]+$/, '').trim() || rawTitle;
+
+    const publishedAt = (() => {
+      if (!pubDateRaw) return new Date().toISOString();
+      const parsed = new Date(pubDateRaw);
+      return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+    })();
+
+    articles.push({
+      headline,
+      url: link,
+      category: 'Web Search',
+      publishedAt,
+      summary: descText.slice(0, 300),
+      fullText: descText,
+      symbols: [symbol],
+      source: sourceName,
+    });
+  });
+
+  return articles;
+}
+
 export function ensureNewsScheduler() {
   if (globalThis.__psxNewsScheduler) return;
   globalThis.__psxNewsScheduler = setInterval(() => {
