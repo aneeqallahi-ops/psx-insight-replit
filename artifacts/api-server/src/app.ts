@@ -56,7 +56,7 @@ app.use("/api/agent/portfolio-review", portfolioSession);
 app.use("/api/notifications", portfolioSession);
 app.use("/api", router);
 
-const staticDir = process.env.STATIC_DIR;
+const staticDir = process.env.STATIC_DIR?.trim();
 if (staticDir) {
   const resolvedStatic = path.resolve(staticDir);
   logger.info({ staticDir: resolvedStatic }, "Serving frontend static files");
