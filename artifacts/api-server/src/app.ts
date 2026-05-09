@@ -1,3 +1,4 @@
+import path from "node:path";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
@@ -54,5 +55,15 @@ app.use("/api/portfolio/tax-profile", portfolioSession);
 app.use("/api/agent/portfolio-review", portfolioSession);
 app.use("/api/notifications", portfolioSession);
 app.use("/api", router);
+
+const staticDir = process.env.STATIC_DIR;
+if (staticDir) {
+  const resolvedStatic = path.resolve(staticDir);
+  logger.info({ staticDir: resolvedStatic }, "Serving frontend static files");
+  app.use(express.static(resolvedStatic, { index: false, maxAge: "1h" }));
+  app.get(/^\/(?!api(\/|$)).*/, (_req, res) => {
+    res.sendFile(path.join(resolvedStatic, "index.html"));
+  });
+}
 
 export default app;
