@@ -20,6 +20,9 @@ export const taxProfiles = pgTable("tax_profiles", {
   sessionId: text("session_id").notNull().unique(),
   filerStatus: text("filer_status").notNull(),
   setAt: text("set_at").notNull(),
+  // New in portfolio v2: extended settings
+  useStandardExpense: boolean("use_standard_expense").notNull().default(true),
+  defaultBenchmark: text("default_benchmark").notNull().default("KSE100"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -34,3 +37,4 @@ export type TaxProfile = typeof taxProfiles.$inferSelect;
 
 export * from "./agent-reports";
 export * from "./notifications";
+export * from "./portfolio-v2";

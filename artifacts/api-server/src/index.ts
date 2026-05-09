@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { ensureNewsScheduler } from "./lib/news-scraper";
 import { ensureDailyReportScheduler } from "./lib/agent/scheduler";
 import { ensureNotificationsScheduler } from "./lib/notifications/scheduler";
+import { seedCgtRates } from "./lib/cgt";
 
 const rawPort = process.env["PORT"];
 
@@ -28,4 +29,5 @@ app.listen(port, (err) => {
   ensureNewsScheduler();
   ensureDailyReportScheduler();
   ensureNotificationsScheduler();
+  seedCgtRates().catch((err) => logger.error({ err }, 'CGT rate seed failed'));
 });

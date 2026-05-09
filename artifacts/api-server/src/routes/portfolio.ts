@@ -2,9 +2,10 @@ import { Router } from 'express';
 import { PSXApi } from '../lib/psx-api';
 import type { Dividend, Fundamentals, Tick } from '../lib/types';
 import { db } from '@workspace/db';
-import { portfolioHoldings, taxProfiles } from '@workspace/db/schema';
+import { portfolioHoldings, taxProfiles, portfolioLots } from '@workspace/db/schema';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { getAcquisitionRegime } from '../lib/cgt';
 
 const holdingSchema = z.object({
   symbol: z.string().min(1).max(20).regex(/^[A-Za-z0-9-]+$/, 'Invalid symbol'),
@@ -149,6 +150,66 @@ router.put('/portfolio/tax-profile', async (req, res) => {
       set: { filerStatus, setAt, updatedAt: new Date() },
     });
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Lot-level portfolio — portfolio v2
+// ---------------------------------------------------------------------------
+
+router.get('/portfolio/lots', async (req, res) => {
+  const sessionId = req.portfolioSessionId;
+
+  let lots = await db
+    .select()
+    .from(portfolioLots)
+    .where(eq(portfolioLots.sessionId, sessionId))
+    .orderBy(portfolioLots.acquisitionDate);
+
+  // Auto-backfill: if no lots exist yet for this session but legacy holdings do,
+  // migrate them as single-lot approximations (one lot per row, averaged cost).
+  let backfilled = false;
+  if (lots.length === 0) {
+    const legacy = await db
+      .select()
+      .from(portfolioHoldings)
+      .where(eq(portfolioHoldings.sessionId, sessionId));
+
+    if (legacy.length > 0) {
+      const newLots = legacy.map((h) => ({
+        sessionId,
+        symbol: h.symbol.toUpperCase(),
+        acquisitionDate: h.buyDate,
+        quantityPurchased: h.shares,
+        quantityRemaining: h.shares,
+        costPerShare: h.avgBuyPrice,
+        commissionPaid: 0,
+        acquisitionRegime: getAcquisitionRegime(h.buyDate),
+        source: 'manual' as const,
+        drip: h.drip,
+        notes: 'Migrated from legacy portfolio (averaged cost, single lot approximation).',
+      }));
+
+      const inserted = await db
+        .insert(portfolioLots)
+        .values(newLots)
+        .returning();
+
+      lots = inserted.sort((a, b) => a.acquisitionDate.localeCompare(b.acquisitionDate));
+      backfilled = true;
+    }
+  }
+
+  res.json({
+    lots,
+    backfilled,
+    ...(backfilled
+      ? {
+          notice:
+            'Your existing positions were imported as single lots using the averaged cost and earliest buy date. ' +
+            'For accurate CGT calculations, consider splitting lots that cover multiple purchases at different prices.',
+        }
+      : {}),
+  });
 });
 
 export default router;
