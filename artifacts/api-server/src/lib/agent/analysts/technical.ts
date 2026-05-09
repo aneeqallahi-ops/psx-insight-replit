@@ -19,7 +19,7 @@ Keep summary under 4 sentences. Each signal entry is one short bullet (max 12 wo
 export async function technicalAnalyst(symbol: string, signal?: AbortSignal): Promise<AnalystReport> {
   let klines: import('../../types').Kline[] = [];
   try {
-    klines = await PSXApi.getKlines(symbol, '1d', { limit: 120 });
+    klines = await PSXApi.getKlines(symbol, '1d', { limit: 100 });
   } catch (err) {
     return {
       summary: `Price history fetch failed for ${symbol}: ${err instanceof Error ? err.message : 'API error'}. Technical indicators cannot be computed.`,
