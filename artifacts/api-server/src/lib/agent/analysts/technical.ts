@@ -16,7 +16,7 @@ You review price action, moving averages, RSI, and MACD then produce a concise, 
 Always answer in JSON with exact keys: {"summary": string, "signals": string[], "confidence": number 0-100}.
 Keep summary under 4 sentences. Each signal entry is one short bullet (max 12 words).`;
 
-export async function technicalAnalyst(symbol: string): Promise<AnalystReport> {
+export async function technicalAnalyst(symbol: string, signal?: AbortSignal): Promise<AnalystReport> {
   const klines = await PSXApi.getKlines(symbol, '1d', { limit: 120 });
   if (klines.length < 30) {
     return {
@@ -47,7 +47,7 @@ MACD: ${indicators.macd ? `line ${indicators.macd.macd.toFixed(3)}, signal ${ind
 
 Write a technical analysis JSON note for ${symbol}. Reference the indicators by name. Avoid hedging language unless data is genuinely mixed.`;
 
-  const text = await analyze(prompt, { system: SYSTEM });
+  const text = await analyze(prompt, { system: SYSTEM, signal });
   const parsed = extractJson<{ summary: string; signals: string[]; confidence: number }>(text);
 
   return {

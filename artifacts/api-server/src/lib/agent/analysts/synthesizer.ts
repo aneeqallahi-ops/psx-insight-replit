@@ -42,6 +42,7 @@ export async function synthesize(
   fundamentals: AnalystReport,
   news: AnalystReport,
   onToken?: (token: string) => void,
+  signal?: AbortSignal,
 ): Promise<SynthesisReport> {
   const prompt = `Symbol: ${symbol}
 
@@ -62,7 +63,7 @@ ${news.signals.map((s) => `- ${s}`).join('\n')}
 
 Produce the JSON verdict now.`;
 
-  const text = await analyzeStream(prompt, { system: SYSTEM, onToken, maxTokens: 2048 });
+  const text = await analyzeStream(prompt, { system: SYSTEM, onToken, maxTokens: 2048, signal });
   const parsed = extractJson<{
     verdict: string;
     confidence: number;

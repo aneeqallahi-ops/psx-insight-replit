@@ -126,10 +126,13 @@ router.post('/agent/analyze/:symbol', async (req, res) => {
 
   sseSetup(res);
   let clientGone = false;
+  const abortController = new AbortController();
   req.on('close', () => {
     clientGone = true;
+    abortController.abort();
     if (!res.writableEnded) res.end();
   });
+  const signal = abortController.signal;
 
   try {
     if (clientGone) return;
@@ -138,23 +141,25 @@ router.post('/agent/analyze/:symbol', async (req, res) => {
     const [techRes, fundRes, newsRes] = await Promise.allSettled([
       (async () => {
         sseSend(res, 'phase', { phase: 'technicals', message: 'Technical analyst running' });
-        const r = await technicalAnalyst(symbol);
+        const r = await technicalAnalyst(symbol, signal);
         sseSend(res, 'analyst', { kind: 'technicals', report: r });
         return r;
       })(),
       (async () => {
         sseSend(res, 'phase', { phase: 'fundamentals', message: 'Fundamental analyst running' });
-        const r = await fundamentalAnalyst(symbol);
+        const r = await fundamentalAnalyst(symbol, signal);
         sseSend(res, 'analyst', { kind: 'fundamentals', report: r });
         return r;
       })(),
       (async () => {
         sseSend(res, 'phase', { phase: 'news', message: 'News analyst running' });
-        const r = await newsAnalyst(symbol);
+        const r = await newsAnalyst(symbol, signal);
         sseSend(res, 'analyst', { kind: 'news', report: r });
         return r;
       })(),
     ]);
+
+    if (clientGone) return;
 
     const technicals =
       techRes.status === 'fulfilled'
@@ -171,13 +176,22 @@ router.post('/agent/analyze/:symbol', async (req, res) => {
 
     sseSend(res, 'phase', { phase: 'synthesizing', message: 'Synthesizer producing verdict' });
 
-    const report = await synthesize(symbol, technicals, fundamentals, news, (token) => {
-      if (!clientGone) sseSend(res, 'token', { text: token });
-    });
+    const report = await synthesize(
+      symbol,
+      technicals,
+      fundamentals,
+      news,
+      (token) => {
+        if (!clientGone) sseSend(res, 'token', { text: token });
+      },
+      signal,
+    );
 
-    await putCachedReport('stock', cacheKey, report, STOCK_TTL_MS, {
-      retainGroupKeyPrefix: `${symbol}:`,
-    });
+    if (!clientGone) {
+      await putCachedReport('stock', cacheKey, report, STOCK_TTL_MS, {
+        retainGroupKeyPrefix: `${symbol}:`,
+      });
+    }
 
     if (!clientGone) {
       sseSend(res, 'report', { report });
@@ -185,12 +199,15 @@ router.post('/agent/analyze/:symbol', async (req, res) => {
     }
     if (!res.writableEnded) res.end();
   } catch (err) {
-    logger.error({ err }, `agent.analyze failed for ${symbol}`);
-    if (!clientGone) {
-      sseSend(res, 'error', {
-        error: err instanceof Error ? err.message : 'Analysis failed',
-      });
+    if (clientGone) {
+      // Client disconnected — abort errors are expected, don't log noise
+      if (!res.writableEnded) res.end();
+      return;
     }
+    logger.error({ err }, `agent.analyze failed for ${symbol}`);
+    sseSend(res, 'error', {
+      error: err instanceof Error ? err.message : 'Analysis failed',
+    });
     if (!res.writableEnded) res.end();
   }
 });

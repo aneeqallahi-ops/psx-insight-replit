@@ -9,7 +9,7 @@ Always answer in JSON with exact keys: {"summary": string, "signals": string[], 
 Keep summary under 4 sentences. Each signal is one short bullet (max 14 words).
 PKR is the local currency. Use "non-compliant" Shariah status as a risk flag if applicable.`;
 
-export async function fundamentalAnalyst(symbol: string): Promise<AnalystReport> {
+export async function fundamentalAnalyst(symbol: string, signal?: AbortSignal): Promise<AnalystReport> {
   const [fundamentalsR, dividendsR, companyR] = await Promise.allSettled([
     PSXApi.getFundamentals(symbol),
     PSXApi.getDividends(symbol),
@@ -48,7 +48,7 @@ ${company ? `Business description (truncated): ${(company.businessDescription ||
 
 Write a fundamental analysis JSON note for ${symbol}. Anchor commentary in the numbers. Call out valuation, payout, and balance-sheet/sector signals.`;
 
-  const text = await analyze(prompt, { system: SYSTEM });
+  const text = await analyze(prompt, { system: SYSTEM, signal });
   const parsed = extractJson<{ summary: string; signals: string[]; confidence: number }>(text);
 
   return {
