@@ -136,7 +136,7 @@ function MoverRow({ mover, tone }: { mover: TopMover; tone: 'up' | 'down' }) {
   );
 }
 
-function HeroBlock({ asOfLabel }: { asOfLabel: string }) {
+function HeroBlock({ asOfLabel, isMarketOpen }: { asOfLabel: string; isMarketOpen: boolean }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ['kse-index'],
     queryFn: fetchKseIndex,
@@ -147,7 +147,7 @@ function HeroBlock({ asOfLabel }: { asOfLabel: string }) {
     <section className="border border-coral/40 bg-gradient-to-br from-coral/10 via-panel to-panel p-6 lg:p-8 clip-notch">
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex-1">
-          <p className="font-mono text-[10px] tracking-widest text-coral">// KSE-100 INDEX · CLOSE</p>
+          <p className="font-mono text-[10px] tracking-widest text-coral">// KSE-100 INDEX · {isMarketOpen ? 'LIVE' : 'CLOSE'}</p>
           <div className="mt-3 flex flex-wrap items-baseline gap-4">
             <p className="font-display text-6xl tracking-tight text-white lg:text-8xl">
               {data ? data.close.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : isLoading ? '—' : '—'}
@@ -469,7 +469,7 @@ export function MarketDashboard() {
           </div>
         </header>
 
-        <HeroBlock asOfLabel={asOfLabel} />
+        <HeroBlock asOfLabel={asOfLabel} isMarketOpen={isMarketOpen} />
 
         {error ? (
           <div className="border border-rose-400/30 bg-rose-400/10 p-5 font-mono text-xs text-rose-100">

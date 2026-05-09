@@ -1,4 +1,4 @@
-import { getStoredNews } from '../../news-scraper';
+import { getNewsWithRefresh } from '../../news-scraper';
 import { analyze, extractJson } from '../llm';
 import type { AnalystReport } from './technical';
 
@@ -19,7 +19,7 @@ function sanitize(text: string): string {
 }
 
 export async function newsAnalyst(symbol: string, signal?: AbortSignal): Promise<AnalystReport> {
-  const all = await getStoredNews();
+  const all = await getNewsWithRefresh();
   const tagged = all.filter((a) => a.symbols.includes(symbol)).slice(0, MAX_ARTICLES_PER_SYMBOL);
 
   // If no symbol-tagged news, fall back to generic recent news for context.

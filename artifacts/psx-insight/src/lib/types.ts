@@ -12,10 +12,10 @@ export interface Tick {
   volume: number;
   trades: number;
   value: number;
-  high: number;
-  low: number;
-  bid: number;
-  ask: number;
+  high?: number | null;
+  low?: number | null;
+  bid?: number | null;
+  ask?: number | null;
   timestamp: number;
 }
 

@@ -183,6 +183,10 @@ export function StockAnalysisPanel({ symbol }: { symbol: string }) {
           } else if (ev.event === 'analyst') {
             const data = ev.data as { kind: 'technicals' | 'fundamentals' | 'news'; report: AnalystReport };
             setAnalysts((prev) => ({ ...prev, [data.kind]: data.report }));
+          } else if (ev.event === 'analyst_error') {
+            const data = ev.data as { kind: 'technicals' | 'fundamentals' | 'news'; error: string };
+            const stub: AnalystReport = { summary: data.error, signals: [], confidence: 0, citations: [] };
+            setAnalysts((prev) => ({ ...prev, [data.kind]: stub }));
           } else if (ev.event === 'token') {
             const data = ev.data as { text: string };
             setStreamingText((prev) => prev + data.text);
@@ -283,6 +287,7 @@ export function StockAnalysisPanel({ symbol }: { symbol: string }) {
   }, [symbol]);
 
   const verdict = report?.verdict ?? null;
+  const retry = runAnalysis;
 
   return (
     <section className="rounded border border-line bg-panel p-6">
@@ -354,6 +359,7 @@ export function StockAnalysisPanel({ symbol }: { symbol: string }) {
               cachedHit={cachedHit}
               generatedAt={generatedAt}
               verdict={verdict}
+              onRetry={retry}
             />
           ) : (
             <HistoryView
@@ -402,6 +408,7 @@ function LatestView({
   cachedHit,
   generatedAt,
   verdict,
+  onRetry,
 }: {
   phase: Phase;
   error: string | null;
@@ -412,6 +419,7 @@ function LatestView({
   cachedHit: boolean;
   generatedAt: string | null;
   verdict: Verdict | null;
+  onRetry?: () => void;
 }) {
   return (
     <div className="space-y-5">
@@ -425,10 +433,19 @@ function LatestView({
       {error ? (
         <div className="flex items-start gap-3 rounded border border-rose-400/40 bg-rose-400/10 p-4 text-sm text-rose-100">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <div>
+          <div className="flex-1">
             <p className="font-semibold">Analysis failed</p>
             <p className="mt-1 text-rose-200/80">{error}</p>
           </div>
+          {onRetry ? (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="shrink-0 rounded border border-rose-400/40 bg-rose-400/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition hover:bg-rose-400/20"
+            >
+              Retry
+            </button>
+          ) : null}
         </div>
       ) : null}
 

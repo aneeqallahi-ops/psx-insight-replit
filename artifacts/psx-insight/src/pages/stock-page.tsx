@@ -68,11 +68,10 @@ function plainPercent(value: number) {
   return `${commaNumber(value)}%`;
 }
 
-function marketStateClass(state: Tick['st']) {
-  if (state === 'OPN') return 'border-emerald-400/40 bg-emerald-400/15 text-emerald-200';
-  if (state === 'CLS') return 'border-rose-400/40 bg-rose-400/15 text-rose-200';
-  if (state === 'SUS') return 'border-amber-400/40 bg-amber-400/15 text-amber-200';
-  return 'border-slate-400/40 bg-slate-400/15 text-slate-200';
+function marketStateClass(isOpen: boolean) {
+  return isOpen
+    ? 'border-emerald-400/40 bg-emerald-400/15 text-emerald-200'
+    : 'border-rose-400/40 bg-rose-400/15 text-rose-200';
 }
 
 async function fetchStockDetail(symbol: string, timeframe: Timeframe): Promise<StockDetailResponse> {
@@ -144,7 +143,9 @@ function StockHeader({ symbol, tick, updatedAt, isMarketOpen, marketStatusLabel 
             <h1 className="text-4xl font-semibold text-white">{symbol}</h1>
             <PortfolioStarButton symbol={symbol} currentPrice={tick?.price} />
             {tick ? (
-              <span className={`rounded border px-3 py-1 text-xs font-semibold ${marketStateClass(tick.st)}`}>{tick.st}</span>
+              <span className={`rounded border px-3 py-1 text-xs font-semibold ${marketStateClass(isMarketOpen)}`}>
+                {isMarketOpen ? 'OPN' : 'CLS'}
+              </span>
             ) : null}
           </div>
           <div className="mt-5 flex flex-wrap items-end gap-4">
@@ -159,14 +160,12 @@ function StockHeader({ symbol, tick, updatedAt, isMarketOpen, marketStatusLabel 
             {updatedAt ? ` - Last updated ${new Date(updatedAt).toLocaleTimeString()}` : ''}
           </p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-3 lg:min-w-[520px]">
-          <Metric label="High" value={tick ? tick.high.toFixed(2) : '--'} />
-          <Metric label="Low" value={tick ? tick.low.toFixed(2) : '--'} />
-          <Metric label="Bid" value={tick ? tick.bid.toFixed(2) : '--'} />
-          <Metric label="Ask" value={tick ? tick.ask.toFixed(2) : '--'} />
+        <div className="grid gap-3 sm:grid-cols-3 lg:min-w-[440px]">
+          {tick?.high != null ? <Metric label="High" value={tick.high.toFixed(2)} /> : null}
+          {tick?.low != null ? <Metric label="Low" value={tick.low.toFixed(2)} /> : null}
           <Metric label="Volume" value={tick ? compactNumber(tick.volume) : '--'} />
-          <Metric label="Value" value={tick ? compactNumber(tick.value) : '--'} />
-          <Metric label="Trades" value={tick ? compactNumber(tick.trades) : '--'} />
+          <Metric label="Value" value={tick && tick.value ? compactNumber(tick.value) : '--'} />
+          <Metric label="Trades" value={tick?.trades ? compactNumber(tick.trades) : '--'} />
         </div>
       </div>
     </section>

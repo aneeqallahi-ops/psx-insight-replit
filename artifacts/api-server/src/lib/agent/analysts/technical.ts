@@ -17,11 +17,23 @@ Always answer in JSON with exact keys: {"summary": string, "signals": string[], 
 Keep summary under 4 sentences. Each signal entry is one short bullet (max 12 words).`;
 
 export async function technicalAnalyst(symbol: string, signal?: AbortSignal): Promise<AnalystReport> {
-  const klines = await PSXApi.getKlines(symbol, '1d', { limit: 120 });
+  let klines: import('../../types').Kline[] = [];
+  try {
+    klines = await PSXApi.getKlines(symbol, '1d', { limit: 120 });
+  } catch (err) {
+    return {
+      summary: `Price history fetch failed for ${symbol}: ${err instanceof Error ? err.message : 'API error'}. Technical indicators cannot be computed.`,
+      signals: ['Klines API returned an error — no chart data available'],
+      confidence: 0,
+      citations: [],
+      raw: { fetchFailed: true, error: String(err) },
+    };
+  }
+
   if (klines.length < 30) {
     return {
       summary: 'Insufficient price history to compute reliable technicals.',
-      signals: ['Less than 30 daily candles available'],
+      signals: [`Only ${klines.length} daily candles available; need at least 30`],
       confidence: 10,
       citations: [{
         kind: 'price',

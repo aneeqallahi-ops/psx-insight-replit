@@ -63,6 +63,32 @@ ${news.signals.map((s) => `- ${s}`).join('\n')}
 
 Produce the JSON verdict now.`;
 
+  // Require at least 2 analysts to have produced real data (confidence > 10).
+  // A confidence of 0 means fetch-failed; ≤10 means insufficient data stub.
+  const realLegs = [technicals, fundamentals, news].filter((leg) => leg.confidence > 10).length;
+  if (realLegs < 2) {
+    const stubs = [
+      ['Technicals', technicals],
+      ['Fundamentals', fundamentals],
+      ['News', news],
+    ]
+      .filter(([, leg]) => (leg as AnalystReport).confidence <= 10)
+      .map(([name]) => name)
+      .join(', ');
+    return {
+      verdict: 'Hold',
+      confidence: 0,
+      headline: `Insufficient data to analyse ${symbol} (${stubs} unavailable)`,
+      rationale: {
+        technicals: technicals.summary,
+        fundamentals: fundamentals.summary,
+        news: news.summary,
+      },
+      citations: [...technicals.citations, ...fundamentals.citations, ...news.citations],
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
   const text = await analyzeStream(prompt, { system: SYSTEM, onToken, maxTokens: 2048, signal });
   const parsed = extractJson<{
     verdict: string;

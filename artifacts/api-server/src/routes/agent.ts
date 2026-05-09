@@ -164,15 +164,27 @@ router.post('/agent/analyze/:symbol', async (req, res) => {
     const technicals =
       techRes.status === 'fulfilled'
         ? techRes.value
-        : { summary: 'Technical analyst failed', signals: [], confidence: 0, citations: [] };
+        : (() => {
+            const msg = techRes.reason instanceof Error ? techRes.reason.message : 'Technical analyst failed';
+            if (!clientGone) sseSend(res, 'analyst_error', { kind: 'technicals', error: msg });
+            return { summary: msg, signals: [], confidence: 0, citations: [] };
+          })();
     const fundamentals =
       fundRes.status === 'fulfilled'
         ? fundRes.value
-        : { summary: 'Fundamental analyst failed', signals: [], confidence: 0, citations: [] };
+        : (() => {
+            const msg = fundRes.reason instanceof Error ? fundRes.reason.message : 'Fundamental analyst failed';
+            if (!clientGone) sseSend(res, 'analyst_error', { kind: 'fundamentals', error: msg });
+            return { summary: msg, signals: [], confidence: 0, citations: [] };
+          })();
     const news =
       newsRes.status === 'fulfilled'
         ? newsRes.value
-        : { summary: 'News analyst failed', signals: [], confidence: 0, citations: [] };
+        : (() => {
+            const msg = newsRes.reason instanceof Error ? newsRes.reason.message : 'News analyst failed';
+            if (!clientGone) sseSend(res, 'analyst_error', { kind: 'news', error: msg });
+            return { summary: msg, signals: [], confidence: 0, citations: [] };
+          })();
 
     sseSend(res, 'phase', { phase: 'synthesizing', message: 'Synthesizer producing verdict' });
 

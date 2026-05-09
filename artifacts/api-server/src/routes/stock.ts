@@ -1,9 +1,62 @@
 import { Router } from 'express';
 import { PSXApi } from '../lib/psx-api';
-import type { Timeframe } from '../lib/types';
+import { describeMarketStatusFromSchedule } from '../lib/market-status';
+import type { Fundamentals, MarketState, MarketStats, Timeframe } from '../lib/types';
 
 const router = Router();
 const timeframes = new Set<Timeframe>(['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M']);
+
+function isMarketStats(data: unknown): data is MarketStats {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'totalVolume' in data &&
+    'topGainers' in data &&
+    'topLosers' in data
+  );
+}
+
+function buildSyntheticTick(
+  symbol: string,
+  fund: Fundamentals,
+  statsData: MarketStats | null,
+  high?: number | null,
+  low?: number | null,
+) {
+  // Try to find symbol in bulk stats movers for real intraday change/volume data.
+  const allMovers = statsData ? [...statsData.topGainers, ...statsData.topLosers] : [];
+  const seen = new Set<string>();
+  const mover = allMovers.find((m) => {
+    if (seen.has(m.symbol)) return false;
+    seen.add(m.symbol);
+    return m.symbol === symbol;
+  }) ?? null;
+
+  const price = fund.price;
+  // changePercent from fundamentals feed is in percent units (e.g. 2.5 → 0.025)
+  const changePercent = mover ? mover.changePercent : fund.changePercent / 100;
+  const change = mover ? mover.change : +(price * changePercent).toFixed(2);
+  const volume = mover ? mover.volume : fund.volume30Avg;
+  const value = mover ? mover.value : 0;
+
+  const schedule = describeMarketStatusFromSchedule();
+  const st: MarketState = schedule.isOpen ? 'OPN' : 'CLS';
+
+  return {
+    symbol,
+    market: 'REG' as const,
+    st,
+    price,
+    change,
+    changePercent,
+    volume,
+    trades: 0,
+    value,
+    ...(high != null ? { high } : {}),
+    ...(low != null ? { low } : {}),
+    timestamp: fund.timestamp ? new Date(fund.timestamp).getTime() : Date.now(),
+  };
+}
 
 router.get('/stock/detail', async (req, res) => {
   const symbol = (req.query.symbol as string)?.toUpperCase();
@@ -16,40 +69,43 @@ router.get('/stock/detail', async (req, res) => {
   }
 
   try {
-    const [fundamentals, company, dividends, klines] = await Promise.allSettled([
+    const [fundamentalsR, companyR, dividendsR, klinesR, statsR] = await Promise.allSettled([
       PSXApi.getFundamentals(symbol),
       PSXApi.getCompany(symbol),
       PSXApi.getDividends(symbol),
       PSXApi.getKlines(symbol, timeframe, { limit: 100 }),
+      PSXApi.getStats('REG'),
     ]);
 
-    const fund = fundamentals.status === 'fulfilled' ? fundamentals.value : null;
-    const comp = company.status === 'fulfilled' ? company.value : null;
-    const divs = dividends.status === 'fulfilled' ? dividends.value : [];
-    const klineData = klines.status === 'fulfilled' ? klines.value : [];
+    const fund = fundamentalsR.status === 'fulfilled' ? fundamentalsR.value : null;
+    const comp = companyR.status === 'fulfilled' ? companyR.value : null;
+    const divs = dividendsR.status === 'fulfilled' ? dividendsR.value : [];
+    const klineData = klinesR.status === 'fulfilled' ? klinesR.value : [];
+    const statsData =
+      statsR.status === 'fulfilled' && isMarketStats(statsR.value) ? statsR.value : null;
 
     if (!fund && !klineData.length) {
-      const reason = fundamentals.status === 'rejected' ? fundamentals.reason : 'No data available';
+      const reason =
+        fundamentalsR.status === 'rejected' ? fundamentalsR.reason : 'No data available';
       res.status(502).json({ error: reason instanceof Error ? reason.message : String(reason) });
       return;
     }
 
-    const syntheticTick = fund ? {
-      symbol,
-      market: 'REG' as const,
-      st: 'CLS' as const,
-      price: fund.price,
-      change: 0,
-      changePercent: fund.changePercent / 100,
-      volume: fund.volume30Avg,
-      trades: 0,
-      value: 0,
-      high: fund.price,
-      low: fund.price,
-      bid: fund.price,
-      ask: fund.price,
-      timestamp: fund.timestamp ? new Date(fund.timestamp).getTime() : Date.now(),
-    } : null;
+    // Use today's kline high/low only if the latest candle is from today's session.
+    const latestKline = klineData.length > 0 ? klineData[klineData.length - 1] : null;
+    let klineHigh: number | null = null;
+    let klineLow: number | null = null;
+    if (latestKline) {
+      const candleDate = new Date(latestKline.timestamp).toDateString();
+      if (candleDate === new Date().toDateString()) {
+        klineHigh = latestKline.high;
+        klineLow = latestKline.low;
+      }
+    }
+
+    const syntheticTick = fund
+      ? buildSyntheticTick(symbol, fund, statsData, klineHigh, klineLow)
+      : null;
 
     res.json({
       tick: syntheticTick,
@@ -61,7 +117,9 @@ router.get('/stock/detail', async (req, res) => {
       updatedAt: Date.now(),
     });
   } catch (error) {
-    res.status(502).json({ error: error instanceof Error ? error.message : `Unable to load ${symbol}` });
+    res
+      .status(502)
+      .json({ error: error instanceof Error ? error.message : `Unable to load ${symbol}` });
   }
 });
 
@@ -72,26 +130,28 @@ router.get('/stock/tick', async (req, res) => {
     return;
   }
   try {
-    const fundamentals = await PSXApi.getFundamentals(symbol);
-    const syntheticTick = {
-      symbol,
-      market: 'REG' as const,
-      st: 'CLS' as const,
-      price: fundamentals.price,
-      change: 0,
-      changePercent: fundamentals.changePercent / 100,
-      volume: fundamentals.volume30Avg,
-      trades: 0,
-      value: 0,
-      high: fundamentals.price,
-      low: fundamentals.price,
-      bid: fundamentals.price,
-      ask: fundamentals.price,
-      timestamp: fundamentals.timestamp ? new Date(fundamentals.timestamp).getTime() : Date.now(),
-    };
-    res.json({ tick: syntheticTick, updatedAt: Date.now() });
+    const [fundamentalsR, statsR] = await Promise.allSettled([
+      PSXApi.getFundamentals(symbol),
+      PSXApi.getStats('REG'),
+    ]);
+
+    if (fundamentalsR.status === 'rejected') {
+      throw fundamentalsR.reason instanceof Error
+        ? fundamentalsR.reason
+        : new Error(String(fundamentalsR.reason));
+    }
+    const fund = fundamentalsR.value;
+    const statsData =
+      statsR.status === 'fulfilled' && isMarketStats(statsR.value) ? statsR.value : null;
+
+    const tick = buildSyntheticTick(symbol, fund, statsData);
+    res.json({ tick, updatedAt: Date.now() });
   } catch (error) {
-    res.status(502).json({ error: error instanceof Error ? error.message : `Unable to load ${symbol} tick` });
+    res
+      .status(502)
+      .json({
+        error: error instanceof Error ? error.message : `Unable to load ${symbol} tick`,
+      });
   }
 });
 
@@ -108,7 +168,11 @@ router.get('/stock/klines', async (req, res) => {
     const klines = await PSXApi.getKlines(symbol, timeframe, { limit: 100 });
     res.json({ klines, timeframe, updatedAt: Date.now() });
   } catch (error) {
-    res.status(502).json({ error: error instanceof Error ? error.message : `Unable to load ${symbol} chart` });
+    res
+      .status(502)
+      .json({
+        error: error instanceof Error ? error.message : `Unable to load ${symbol} chart`,
+      });
   }
 });
 
