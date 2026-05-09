@@ -1,11 +1,27 @@
 import { anthropic } from '@workspace/integrations-anthropic-ai';
-import pRetry from 'p-retry';
+import pRetry, { AbortError } from 'p-retry';
 import { logger } from '../logger';
 
 const MODEL = 'claude-sonnet-4-6';
 const MAX_TOKENS = 8192;
 const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_CALLS_PER_MINUTE = 10;
+
+// Anthropic caches a system block when ≥1024 tokens (Sonnet). Marking shorter
+// prompts is harmless — the API silently skips caching below the threshold.
+function buildSystem(text: string | undefined) {
+  if (!text) return undefined;
+  return [
+    { type: 'text' as const, text, cache_control: { type: 'ephemeral' as const } },
+  ];
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!err || !(err instanceof Error)) return false;
+  if (err.name === 'AbortError') return true;
+  const code = (err as unknown as { code?: unknown }).code;
+  return typeof code === 'string' && code === 'ABORT_ERR';
+}
 
 const callTimestamps: number[] = [];
 
@@ -43,38 +59,51 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 export interface AnalyzeOptions {
   system?: string;
   maxTokens?: number;
+  signal?: AbortSignal;
 }
 
 export async function analyze(prompt: string, options: AnalyzeOptions = {}): Promise<string> {
+  if (options.signal?.aborted) throw new AbortError('Aborted before LLM call');
   checkRateLimit();
   const start = Date.now();
 
   const result = await pRetry(
     async () => {
-      const message = await withTimeout(
-        anthropic.messages.create({
-          model: MODEL,
-          max_tokens: options.maxTokens ?? MAX_TOKENS,
-          system: options.system,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-        REQUEST_TIMEOUT_MS,
-        'Anthropic messages.create',
-      );
+      if (options.signal?.aborted) throw new AbortError('Aborted before retry');
+      try {
+        const message = await withTimeout(
+          anthropic.messages.create(
+            {
+              model: MODEL,
+              max_tokens: options.maxTokens ?? MAX_TOKENS,
+              system: buildSystem(options.system),
+              messages: [{ role: 'user', content: prompt }],
+            },
+            { signal: options.signal },
+          ),
+          REQUEST_TIMEOUT_MS,
+          'Anthropic messages.create',
+        );
 
-      const block = message.content.find((b) => b.type === 'text');
-      const text = block && block.type === 'text' ? block.text : '';
+        const block = message.content.find((b) => b.type === 'text');
+        const text = block && block.type === 'text' ? block.text : '';
 
-      logger.info(
-        {
-          inputTokens: message.usage?.input_tokens,
-          outputTokens: message.usage?.output_tokens,
-          durationMs: Date.now() - start,
-        },
-        'LLM analyze call complete',
-      );
+        logger.info(
+          {
+            inputTokens: message.usage?.input_tokens,
+            outputTokens: message.usage?.output_tokens,
+            cacheCreationInputTokens: message.usage?.cache_creation_input_tokens,
+            cacheReadInputTokens: message.usage?.cache_read_input_tokens,
+            durationMs: Date.now() - start,
+          },
+          'LLM analyze call complete',
+        );
 
-      return text;
+        return text;
+      } catch (err) {
+        if (isAbortError(err)) throw new AbortError(err instanceof Error ? err.message : 'Aborted');
+        throw err;
+      }
     },
     { retries: 5, minTimeout: 1000, maxTimeout: 30_000, factor: 2 },
   );
@@ -90,17 +119,32 @@ export async function analyzeStream(
   prompt: string,
   options: AnalyzeStreamOptions = {},
 ): Promise<string> {
+  if (options.signal?.aborted) throw new AbortError('Aborted before LLM call');
   checkRateLimit();
   const start = Date.now();
 
   const result = await pRetry(
     async () => {
+      if (options.signal?.aborted) throw new AbortError('Aborted before retry');
+
       const stream = anthropic.messages.stream({
         model: MODEL,
         max_tokens: options.maxTokens ?? MAX_TOKENS,
-        system: options.system,
+        system: buildSystem(options.system),
         messages: [{ role: 'user', content: prompt }],
       });
+
+      // Forward an external abort (e.g. SSE client disconnect) to the stream.
+      let externallyAborted = false;
+      const onExternalAbort = () => {
+        externallyAborted = true;
+        try {
+          stream.controller.abort();
+        } catch {
+          // best-effort abort
+        }
+      };
+      options.signal?.addEventListener('abort', onExternalAbort, { once: true });
 
       // Hard 60s ceiling on the entire stream read; abort upstream on timeout.
       const timer = setTimeout(() => {
@@ -113,7 +157,14 @@ export async function analyzeStream(
       const startedAt = Date.now();
 
       let full = '';
-      let finalUsage: { input_tokens?: number; output_tokens?: number } | undefined;
+      let finalUsage:
+        | {
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_creation_input_tokens?: number;
+            cache_read_input_tokens?: number;
+          }
+        | undefined;
 
       try {
         for await (const event of stream) {
@@ -121,24 +172,36 @@ export async function analyzeStream(
             full += event.delta.text;
             options.onToken?.(event.delta.text);
           } else if (event.type === 'message_delta' && event.usage) {
-            finalUsage = { output_tokens: event.usage.output_tokens };
+            finalUsage = { ...finalUsage, output_tokens: event.usage.output_tokens };
           } else if (event.type === 'message_start' && event.message.usage) {
-            finalUsage = { ...finalUsage, input_tokens: event.message.usage.input_tokens };
+            const u = event.message.usage;
+            finalUsage = {
+              ...finalUsage,
+              input_tokens: u.input_tokens,
+              cache_creation_input_tokens: u.cache_creation_input_tokens ?? undefined,
+              cache_read_input_tokens: u.cache_read_input_tokens ?? undefined,
+            };
           }
         }
       } catch (err) {
+        if (externallyAborted || isAbortError(err)) {
+          throw new AbortError('Stream aborted by client');
+        }
         if (Date.now() - startedAt >= REQUEST_TIMEOUT_MS) {
           throw new Error(`Anthropic messages.stream timed out after ${REQUEST_TIMEOUT_MS}ms`);
         }
         throw err;
       } finally {
         clearTimeout(timer);
+        options.signal?.removeEventListener('abort', onExternalAbort);
       }
 
       logger.info(
         {
           inputTokens: finalUsage?.input_tokens,
           outputTokens: finalUsage?.output_tokens,
+          cacheCreationInputTokens: finalUsage?.cache_creation_input_tokens,
+          cacheReadInputTokens: finalUsage?.cache_read_input_tokens,
           durationMs: Date.now() - start,
         },
         'LLM analyzeStream call complete',
