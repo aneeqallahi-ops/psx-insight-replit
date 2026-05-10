@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { Bell, ChevronDown, ChevronUp, ClipboardCheck, Copy, Key, Pencil, PieChart, Search, Trash2, X } from 'lucide-react';
+import { Bell, ChevronDown, ChevronUp, ClipboardCheck, Copy, Key, Layers, Pencil, PieChart, Search, Trash2, X } from 'lucide-react';
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { PortfolioReviewModal } from '@/components/agent/portfolio-review-modal';
+import { LotView } from '@/components/lot-view';
 import { useMarketStatus } from '@/hooks/useMarketStatus';
 import {
   calculateCapitalGainsTax,
@@ -282,6 +283,7 @@ export function PortfolioPage() {
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [toast, setToast] = useState('');
   const [expandedSymbol, setExpandedSymbol] = useState('');
+  const [view, setView] = useState<'positions' | 'lots'>('positions');
   const [priceFlashes, setPriceFlashes] = useState<Record<string, 'up' | 'down'>>({});
   const previousPricesRef = useRef(new Map<string, number>());
   const notifiedRef = useRef(new Set<string>());
@@ -463,7 +465,42 @@ export function PortfolioPage() {
 
         <AddPositionCard symbols={symbols} holdings={holdings} onAdd={completeAdd} />
 
-        {holdings.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-line bg-panel p-1.5">
+          <button
+            type="button"
+            onClick={() => setView('positions')}
+            className={`flex items-center gap-2 rounded px-4 py-2 text-sm font-medium transition ${
+              view === 'positions'
+                ? 'bg-coral/15 text-coral'
+                : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            <PieChart className="h-4 w-4" aria-hidden="true" />
+            Positions
+            <span className="rounded border border-line bg-black/30 px-1.5 py-0.5 text-[10px] uppercase text-gray-500">
+              avg cost
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setView('lots')}
+            className={`flex items-center gap-2 rounded px-4 py-2 text-sm font-medium transition ${
+              view === 'lots'
+                ? 'bg-coral/15 text-coral'
+                : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            <Layers className="h-4 w-4" aria-hidden="true" />
+            Lots
+            <span className="rounded border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[10px] uppercase font-semibold text-amber-200">
+              new · CGT-aware
+            </span>
+          </button>
+        </div>
+
+        {view === 'lots' ? (
+          <LotView />
+        ) : holdings.length > 0 ? (
           <>
             <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
               <StatCard label="Total Invested" value={money(summary.invested)} />

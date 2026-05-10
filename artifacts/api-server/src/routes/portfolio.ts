@@ -2,10 +2,10 @@ import { Router } from 'express';
 import { PSXApi } from '../lib/psx-api';
 import type { Dividend, Fundamentals, Tick } from '../lib/types';
 import { db } from '@workspace/db';
-import { portfolioHoldings, taxProfiles, portfolioLots } from '@workspace/db/schema';
+import { portfolioHoldings, taxProfiles, portfolioLots, type PortfolioLot } from '@workspace/db/schema';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { getAcquisitionRegime } from '../lib/cgt';
+import { getAcquisitionRegime, daysBetween, lookupCgtRate } from '../lib/cgt';
 
 const holdingSchema = z.object({
   symbol: z.string().min(1).max(20).regex(/^[A-Za-z0-9-]+$/, 'Invalid symbol'),
@@ -156,59 +156,132 @@ router.put('/portfolio/tax-profile', async (req, res) => {
 // Lot-level portfolio — portfolio v2
 // ---------------------------------------------------------------------------
 
-router.get('/portfolio/lots', async (req, res) => {
-  const sessionId = req.portfolioSessionId;
+const NCCPL_EXPENSE_RATE = 0.005; // 0.5% standard expense, both sides
 
+async function loadOrBackfillLots(sessionId: string): Promise<{ lots: PortfolioLot[]; backfilled: boolean }> {
   let lots = await db
     .select()
     .from(portfolioLots)
     .where(eq(portfolioLots.sessionId, sessionId))
     .orderBy(portfolioLots.acquisitionDate);
 
-  // Auto-backfill: if no lots exist yet for this session but legacy holdings do,
-  // migrate them as single-lot approximations (one lot per row, averaged cost).
-  let backfilled = false;
-  if (lots.length === 0) {
-    const legacy = await db
-      .select()
-      .from(portfolioHoldings)
-      .where(eq(portfolioHoldings.sessionId, sessionId));
+  if (lots.length > 0) return { lots, backfilled: false };
 
-    if (legacy.length > 0) {
-      const newLots = legacy.map((h) => ({
-        sessionId,
-        symbol: h.symbol.toUpperCase(),
-        acquisitionDate: h.buyDate,
-        quantityPurchased: h.shares,
-        quantityRemaining: h.shares,
-        costPerShare: h.avgBuyPrice,
-        commissionPaid: 0,
-        acquisitionRegime: getAcquisitionRegime(h.buyDate),
-        source: 'manual' as const,
-        drip: h.drip,
-        notes: 'Migrated from legacy portfolio (averaged cost, single lot approximation).',
-      }));
+  // Auto-backfill from legacy portfolio_holdings (one lot per existing row).
+  const legacy = await db
+    .select()
+    .from(portfolioHoldings)
+    .where(eq(portfolioHoldings.sessionId, sessionId));
 
-      const inserted = await db
-        .insert(portfolioLots)
-        .values(newLots)
-        .returning();
+  if (legacy.length === 0) return { lots: [], backfilled: false };
 
-      lots = inserted.sort((a, b) => a.acquisitionDate.localeCompare(b.acquisitionDate));
-      backfilled = true;
-    }
-  }
+  const newLots = legacy.map((h) => ({
+    sessionId,
+    symbol: h.symbol.toUpperCase(),
+    acquisitionDate: h.buyDate,
+    quantityPurchased: h.shares,
+    quantityRemaining: h.shares,
+    costPerShare: h.avgBuyPrice,
+    commissionPaid: 0,
+    acquisitionRegime: getAcquisitionRegime(h.buyDate),
+    source: 'manual' as const,
+    drip: h.drip,
+    notes: 'Migrated from legacy portfolio (averaged cost, single lot approximation).',
+  }));
+
+  const inserted = await db.insert(portfolioLots).values(newLots).returning();
+  lots = inserted.sort((a, b) => a.acquisitionDate.localeCompare(b.acquisitionDate));
+  return { lots, backfilled: true };
+}
+
+const BACKFILL_NOTICE =
+  'Your existing positions were imported as single lots using the averaged cost and earliest buy date. ' +
+  'For accurate CGT calculations, consider splitting lots that cover multiple purchases at different prices.';
+
+router.get('/portfolio/lots', async (req, res) => {
+  const sessionId = req.portfolioSessionId;
+  const { lots, backfilled } = await loadOrBackfillLots(sessionId);
+  res.json({ lots, backfilled, ...(backfilled ? { notice: BACKFILL_NOTICE } : {}) });
+});
+
+router.get('/portfolio/lots/snapshot', async (req, res) => {
+  const sessionId = req.portfolioSessionId;
+  const { lots, backfilled } = await loadOrBackfillLots(sessionId);
+
+  // Resolve filer status (default to 'filer' if not set yet).
+  const profileRows = await db
+    .select()
+    .from(taxProfiles)
+    .where(eq(taxProfiles.sessionId, sessionId));
+  const filerStatus: 'filer' | 'non-filer' =
+    profileRows[0]?.filerStatus === 'non-filer' ? 'non-filer' : 'filer';
+
+  // Fetch live ticks for unique symbols only.
+  const uniqueSymbols = Array.from(new Set(lots.map((l) => l.symbol)));
+  const tickResults = await Promise.all(
+    uniqueSymbols.map(async (symbol) => {
+      try {
+        const tick = await PSXApi.getTick('REG', symbol);
+        return [symbol, tick] as const;
+      } catch {
+        return [symbol, null] as const;
+      }
+    }),
+  );
+  const tickBySymbol = new Map<string, Tick | null>(tickResults);
+
+  const today = new Date();
+
+  const enriched = await Promise.all(
+    lots.map(async (lot) => {
+      const tick = tickBySymbol.get(lot.symbol) ?? null;
+      const currentPrice = tick?.price ?? null;
+      const holdingDays = daysBetween(lot.acquisitionDate, today);
+      const cgtRateIfSoldToday = await lookupCgtRate(
+        lot.acquisitionRegime as Parameters<typeof lookupCgtRate>[0],
+        holdingDays,
+        filerStatus,
+      );
+
+      let currentValue: number | null = null;
+      let costBasisIfSoldToday: number | null = null;
+      let proceedsIfSoldToday: number | null = null;
+      let unrealizedGain: number | null = null;
+      let unrealizedGainPercent: number | null = null;
+      let projectedCgtIfSoldToday: number | null = null;
+
+      if (currentPrice !== null && Number.isFinite(currentPrice)) {
+        currentValue = lot.quantityRemaining * currentPrice;
+        costBasisIfSoldToday = lot.quantityRemaining * lot.costPerShare * (1 + NCCPL_EXPENSE_RATE);
+        proceedsIfSoldToday = lot.quantityRemaining * currentPrice * (1 - NCCPL_EXPENSE_RATE);
+        unrealizedGain = proceedsIfSoldToday - costBasisIfSoldToday;
+        const investedRaw = lot.quantityRemaining * lot.costPerShare;
+        unrealizedGainPercent = investedRaw > 0 ? unrealizedGain / investedRaw : 0;
+        projectedCgtIfSoldToday = unrealizedGain > 0 ? unrealizedGain * cgtRateIfSoldToday : 0;
+      }
+
+      return {
+        ...lot,
+        currentPrice,
+        currentValue,
+        costBasisIfSoldToday,
+        proceedsIfSoldToday,
+        unrealizedGain,
+        unrealizedGainPercent,
+        holdingDays,
+        cgtRateIfSoldToday,
+        projectedCgtIfSoldToday,
+        priceError: tick === null ? `Unable to load ${lot.symbol}` : null,
+      };
+    }),
+  );
 
   res.json({
-    lots,
+    lots: enriched,
+    filerStatus,
+    asOf: today.getTime(),
     backfilled,
-    ...(backfilled
-      ? {
-          notice:
-            'Your existing positions were imported as single lots using the averaged cost and earliest buy date. ' +
-            'For accurate CGT calculations, consider splitting lots that cover multiple purchases at different prices.',
-        }
-      : {}),
+    ...(backfilled ? { notice: BACKFILL_NOTICE } : {}),
   });
 });
 

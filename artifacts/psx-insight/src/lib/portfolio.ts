@@ -136,3 +136,64 @@ export function makeHolding(symbol: string, shares: number, avgBuyPrice: number,
     addedAt: new Date().toISOString(),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Lot-level portfolio (v2)
+// ---------------------------------------------------------------------------
+
+export type AcquisitionRegime =
+  | 'pre_2013'
+  | 'jul13_jun22'
+  | 'jul22_jun24'
+  | 'jul24_jun25'
+  | 'post_jul25';
+
+export interface LotSnapshot {
+  id: number;
+  symbol: string;
+  acquisitionDate: string;
+  acquisitionRegime: AcquisitionRegime;
+  quantityPurchased: number;
+  quantityRemaining: number;
+  costPerShare: number;
+  commissionPaid: number;
+  source: 'manual' | 'dividend_reinvest' | 'csv_import';
+  drip: boolean;
+  notes: string | null;
+  // computed
+  currentPrice: number | null;
+  currentValue: number | null;
+  costBasisIfSoldToday: number | null;
+  proceedsIfSoldToday: number | null;
+  unrealizedGain: number | null;
+  unrealizedGainPercent: number | null;
+  holdingDays: number;
+  cgtRateIfSoldToday: number;
+  projectedCgtIfSoldToday: number | null;
+  priceError: string | null;
+}
+
+export interface LotsSnapshotResponse {
+  lots: LotSnapshot[];
+  filerStatus: FilerStatus;
+  asOf: number;
+  backfilled: boolean;
+  notice?: string;
+}
+
+export const REGIME_LABELS: Record<AcquisitionRegime, { label: string; short: string; tone: string }> = {
+  pre_2013:    { label: 'Pre-2013 (exempt)',          short: 'Pre-2013',     tone: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' },
+  jul13_jun22: { label: 'Jul 2013 – Jun 2022',        short: '2013–22',      tone: 'border-cyan-400/30 bg-cyan-400/10 text-cyan-200' },
+  jul22_jun24: { label: 'Jul 2022 – Jun 2024',        short: '2022–24',      tone: 'border-amber-400/30 bg-amber-400/10 text-amber-200' },
+  jul24_jun25: { label: 'Jul 2024 – Jun 2025',        short: '2024–25',      tone: 'border-orange-400/30 bg-orange-400/10 text-orange-200' },
+  post_jul25:  { label: 'Post-Jul 2025 (15% flat)',   short: 'Post-Jul 25',  tone: 'border-rose-400/30 bg-rose-400/10 text-rose-200' },
+};
+
+export async function fetchLotsSnapshot(): Promise<LotsSnapshotResponse> {
+  const res = await fetch('/api/portfolio/lots/snapshot', {
+    headers: { 'X-Portfolio-Key': getPortfolioKey() },
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Unable to load portfolio lots');
+  return res.json() as Promise<LotsSnapshotResponse>;
+}
