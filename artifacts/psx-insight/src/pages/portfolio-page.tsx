@@ -1,12 +1,14 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, ChevronDown, ChevronUp, ClipboardCheck, Copy, Key, Layers, Pencil, PieChart, Search, Trash2, X } from 'lucide-react';
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { PortfolioReviewModal } from '@/components/agent/portfolio-review-modal';
 import { LotView } from '@/components/lot-view';
 import { useMarketStatus } from '@/hooks/useMarketStatus';
 import {
+  addLotToApi,
   calculateCapitalGainsTax,
   calculateDividendTax,
+  deleteLotsForSymbolApi,
   fetchPortfolioFromApi,
   fetchTaxProfileFromApi,
   getPortfolioKey,
@@ -199,7 +201,7 @@ function AddPositionCard({ symbols, holdings, onAdd }: { symbols: string[]; hold
     <section className="rounded border border-line bg-panel p-5">
       <div className="flex flex-col gap-1">
         <h2 className="text-lg font-semibold text-white">Add Position</h2>
-        <p className="text-sm text-gray-500">Add PSX holdings and calculate dividends after withholding tax.</p>
+        <p className="text-sm text-gray-500">Each add creates a new lot for accurate CGT tracking. The Positions view also shows an averaged total per symbol.</p>
       </div>
       <form onSubmit={submit} className="mt-5 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <div className="relative lg:col-span-2 xl:col-span-1">
@@ -218,7 +220,7 @@ function AddPositionCard({ symbols, holdings, onAdd }: { symbols: string[]; hold
             </div>
           ) : null}
           <p className="mt-2 text-xs text-gray-500">Current price: <span className="text-gray-300">{tickQuery.isFetching ? 'Loading' : currentPrice ? money(currentPrice) : '--'}</span></p>
-          {selectedHolding ? <p className="mt-1 text-xs text-amber-200">Existing holding found. Adding will average your buy price.</p> : null}
+          {selectedHolding ? <p className="mt-1 text-xs text-amber-200">Existing holding found. Adding creates a separate lot (Positions view still averages).</p> : null}
         </div>
 
         <label className="text-sm text-gray-300">Number of shares
@@ -284,6 +286,7 @@ export function PortfolioPage() {
   const [toast, setToast] = useState('');
   const [expandedSymbol, setExpandedSymbol] = useState('');
   const [view, setView] = useState<'positions' | 'lots'>('positions');
+  const queryClient = useQueryClient();
   const [priceFlashes, setPriceFlashes] = useState<Record<string, 'up' | 'down'>>({});
   const previousPricesRef = useRef(new Map<string, number>());
   const notifiedRef = useRef(new Set<string>());
@@ -384,14 +387,31 @@ export function PortfolioPage() {
     }
   }
 
-  function completeAdd(holding: Holding, toastPrice: number) {
+  async function addLotForHolding(holding: Holding) {
+    try {
+      await addLotToApi({
+        symbol: holding.symbol,
+        shares: holding.shares,
+        buyPrice: holding.avgBuyPrice,
+        buyDate: holding.buyDate,
+        drip: holding.drip,
+      });
+      queryClient.invalidateQueries({ queryKey: ['portfolio-lots-snapshot'] });
+    } catch {
+      showToast('Position saved, but could not record the new lot — refresh and try again.');
+    }
+  }
+
+  async function completeAdd(holding: Holding, toastPrice: number) {
     const exists = holdings.some((h) => h.symbol === holding.symbol);
     if (exists) { setPendingHolding({ holding, toastPrice }); return; }
+    await addLotForHolding(holding);
     saveHoldings(upsertHolding(holdings, holding));
     showToast(`${holding.symbol} added - ${holding.shares} shares @ ${money(toastPrice)}`);
   }
-  function confirmPendingAdd() {
+  async function confirmPendingAdd() {
     if (!pendingHolding) return;
+    await addLotForHolding(pendingHolding.holding);
     saveHoldings(upsertHolding(holdings, pendingHolding.holding));
     showToast(`${pendingHolding.holding.symbol} added - ${pendingHolding.holding.shares} shares @ ${money(pendingHolding.toastPrice)}`);
     setPendingHolding(null);
@@ -416,9 +436,15 @@ export function PortfolioPage() {
     saveHoldings(holdings.map((h) => h.symbol === holding.symbol ? { ...h, shares: parsedShares, avgBuyPrice: parsedPrice } : h));
     showToast(`${holding.symbol} updated.`);
   }
-  function removeHolding(symbol: string) {
+  async function removeHolding(symbol: string) {
     if (!window.confirm(`Remove ${symbol} from your portfolio?`)) return;
     saveHoldings(holdings.filter((h) => h.symbol !== symbol));
+    try {
+      await deleteLotsForSymbolApi(symbol);
+      queryClient.invalidateQueries({ queryKey: ['portfolio-lots-snapshot'] });
+    } catch {
+      // best-effort; the position is already gone from the legacy table
+    }
     showToast(`${symbol} removed.`);
   }
 
@@ -622,8 +648,8 @@ export function PortfolioPage() {
       {pendingHolding && pendingExisting ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 px-4">
           <div className="w-full max-w-lg rounded border border-line bg-panel p-6 shadow-2xl">
-            <h2 className="text-xl font-semibold text-white">Average Existing Position</h2>
-            <p className="mt-2 text-sm text-gray-400">{pendingHolding.holding.symbol} already exists. Confirm to combine the positions.</p>
+            <h2 className="text-xl font-semibold text-white">Add another lot of {pendingHolding.holding.symbol}</h2>
+            <p className="mt-2 text-sm text-gray-400">A new lot will be created at this price for accurate CGT. The Positions view will continue to show the averaged total.</p>
             <div className="mt-5 grid gap-3 sm:grid-cols-3">
               <StatCard label="Existing avg" value={money(pendingExisting.avgBuyPrice)} />
               <StatCard label="New buy price" value={money(pendingHolding.holding.avgBuyPrice)} />

@@ -197,3 +197,28 @@ export async function fetchLotsSnapshot(): Promise<LotsSnapshotResponse> {
   if (!res.ok) throw new Error('Unable to load portfolio lots');
   return res.json() as Promise<LotsSnapshotResponse>;
 }
+
+export interface NewLotInput {
+  symbol: string;
+  shares: number;
+  buyPrice: number;
+  buyDate: string;
+  drip: boolean;
+}
+
+export async function addLotToApi(input: NewLotInput): Promise<void> {
+  const res = await fetch('/api/portfolio/lots', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ ...input, symbol: input.symbol.toUpperCase() }),
+  });
+  if (!res.ok) throw new Error('Unable to add lot');
+}
+
+export async function deleteLotsForSymbolApi(symbol: string): Promise<void> {
+  const res = await fetch(`/api/portfolio/lots/by-symbol/${encodeURIComponent(symbol.toUpperCase())}`, {
+    method: 'DELETE',
+    headers: { 'X-Portfolio-Key': getPortfolioKey() },
+  });
+  if (!res.ok) throw new Error('Unable to delete lots');
+}

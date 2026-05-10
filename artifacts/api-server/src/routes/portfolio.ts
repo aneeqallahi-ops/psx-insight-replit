@@ -3,7 +3,7 @@ import { PSXApi } from '../lib/psx-api';
 import type { Dividend, Fundamentals, Tick } from '../lib/types';
 import { db } from '@workspace/db';
 import { portfolioHoldings, taxProfiles, portfolioLots, type PortfolioLot } from '@workspace/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { getAcquisitionRegime, daysBetween, lookupCgtRate } from '../lib/cgt';
 
@@ -23,6 +23,14 @@ const putPositionsSchema = z.object({
 const putTaxProfileSchema = z.object({
   filerStatus: z.enum(['filer', 'non-filer']),
   setAt: z.string().datetime({ offset: true }),
+});
+
+const postLotSchema = z.object({
+  symbol: z.string().min(1).max(20).regex(/^[A-Za-z0-9-]+$/, 'Invalid symbol'),
+  shares: z.number().finite().positive(),
+  buyPrice: z.number().finite().positive(),
+  buyDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'buyDate must be YYYY-MM-DD'),
+  drip: z.boolean(),
 });
 
 const router = Router();
@@ -283,6 +291,46 @@ router.get('/portfolio/lots/snapshot', async (req, res) => {
     backfilled,
     ...(backfilled ? { notice: BACKFILL_NOTICE } : {}),
   });
+});
+
+router.post('/portfolio/lots', async (req, res) => {
+  const sessionId = req.portfolioSessionId;
+  const parsed = postLotSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid lot payload', details: parsed.error.flatten() });
+    return;
+  }
+  const { symbol, shares, buyPrice, buyDate, drip } = parsed.data;
+  const [inserted] = await db
+    .insert(portfolioLots)
+    .values({
+      sessionId,
+      symbol: symbol.toUpperCase(),
+      acquisitionDate: buyDate,
+      quantityPurchased: shares,
+      quantityRemaining: shares,
+      costPerShare: buyPrice,
+      commissionPaid: 0,
+      acquisitionRegime: getAcquisitionRegime(buyDate),
+      source: 'manual',
+      drip,
+    })
+    .returning();
+  res.json({ lot: inserted });
+});
+
+router.delete('/portfolio/lots/by-symbol/:symbol', async (req, res) => {
+  const sessionId = req.portfolioSessionId;
+  const symbol = (req.params.symbol ?? '').toUpperCase();
+  if (!symbol || !/^[A-Z0-9-]+$/.test(symbol)) {
+    res.status(400).json({ error: 'Invalid symbol' });
+    return;
+  }
+  const deleted = await db
+    .delete(portfolioLots)
+    .where(and(eq(portfolioLots.sessionId, sessionId), eq(portfolioLots.symbol, symbol)))
+    .returning({ id: portfolioLots.id });
+  res.json({ deleted: deleted.length });
 });
 
 export default router;
