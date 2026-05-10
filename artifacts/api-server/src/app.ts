@@ -51,6 +51,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api/portfolio/positions", portfolioSession);
+app.use("/api/portfolio/lots", portfolioSession);
 app.use("/api/portfolio/tax-profile", portfolioSession);
 app.use("/api/agent/portfolio-review", portfolioSession);
 app.use("/api/notifications", portfolioSession);
