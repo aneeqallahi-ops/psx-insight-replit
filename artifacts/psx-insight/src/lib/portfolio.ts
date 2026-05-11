@@ -222,3 +222,31 @@ export async function deleteLotsForSymbolApi(symbol: string): Promise<void> {
   });
   if (!res.ok) throw new Error('Unable to delete lots');
 }
+
+export interface SellInput {
+  symbol: string;
+  quantitySold: number;
+  salePricePerShare: number;
+  saleDate: string;
+}
+
+export interface SellResult {
+  ok: boolean;
+  lotsConsumed: number;
+  totalRealizedGain: number;
+  totalCgt: number;
+  fiscalYear: string;
+}
+
+export async function sellLotsApi(input: SellInput): Promise<SellResult> {
+  const res = await fetch('/api/portfolio/lots/sell', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ ...input, symbol: input.symbol.toUpperCase() }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? 'Unable to record sale');
+  }
+  return res.json() as Promise<SellResult>;
+}

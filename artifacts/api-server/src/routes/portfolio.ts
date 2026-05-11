@@ -3,8 +3,8 @@ import { PSXApi } from '../lib/psx-api';
 import { describeMarketStatusFromSchedule } from '../lib/market-status';
 import type { Dividend, Fundamentals, Tick } from '../lib/types';
 import { db } from '@workspace/db';
-import { portfolioHoldings, taxProfiles, portfolioLots, type PortfolioLot } from '@workspace/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { portfolioHoldings, taxProfiles, portfolioLots, portfolioDisposals, type PortfolioLot, type NewPortfolioDisposal } from '@workspace/db/schema';
+import { eq, and, gt } from 'drizzle-orm';
 import { z } from 'zod';
 import { getAcquisitionRegime, daysBetween, lookupCgtRate } from '../lib/cgt';
 
@@ -344,6 +344,99 @@ router.post('/portfolio/lots', async (req, res) => {
     })
     .returning();
   res.json({ lot: inserted });
+});
+
+const sellSchema = z.object({
+  symbol: z.string().min(1).max(20).regex(/^[A-Za-z0-9-]+$/, 'Invalid symbol'),
+  quantitySold: z.number().finite().positive(),
+  salePricePerShare: z.number().finite().positive(),
+  saleDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'saleDate must be YYYY-MM-DD'),
+});
+
+function getFiscalYear(dateStr: string): string {
+  const d = new Date(dateStr);
+  const month = d.getMonth() + 1;
+  const year = d.getFullYear();
+  const fy = month >= 7 ? year + 1 : year;
+  return `FY${String(fy).slice(-2)}`;
+}
+
+router.post('/portfolio/lots/sell', async (req, res) => {
+  const sessionId = req.portfolioSessionId;
+  const parsed = sellSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid sell payload', details: parsed.error.flatten() });
+    return;
+  }
+  const { symbol, quantitySold, salePricePerShare, saleDate } = parsed.data;
+  const upperSymbol = symbol.toUpperCase();
+
+  const profileRows = await db.select().from(taxProfiles).where(eq(taxProfiles.sessionId, sessionId));
+  const filerStatus: 'filer' | 'non-filer' = profileRows[0]?.filerStatus === 'non-filer' ? 'non-filer' : 'filer';
+
+  const lots = await db
+    .select()
+    .from(portfolioLots)
+    .where(and(
+      eq(portfolioLots.sessionId, sessionId),
+      eq(portfolioLots.symbol, upperSymbol),
+      gt(portfolioLots.quantityRemaining, 0),
+    ))
+    .orderBy(portfolioLots.acquisitionDate);
+
+  const totalAvailable = lots.reduce((sum, l) => sum + l.quantityRemaining, 0);
+  if (totalAvailable < quantitySold - 1e-9) {
+    res.status(400).json({ error: `Cannot sell ${quantitySold} — only ${totalAvailable.toFixed(2)} shares available.` });
+    return;
+  }
+
+  let remaining = quantitySold;
+  const disposalRows: NewPortfolioDisposal[] = [];
+  const lotUpdates: { id: number; newQty: number }[] = [];
+  const saleDateObj = new Date(saleDate);
+
+  for (const lot of lots) {
+    if (remaining <= 1e-9) break;
+    const qty = Math.min(lot.quantityRemaining, remaining);
+    const holdingPeriodDays = daysBetween(lot.acquisitionDate, saleDateObj);
+    const cgtRateApplied = await lookupCgtRate(
+      lot.acquisitionRegime as Parameters<typeof lookupCgtRate>[0],
+      holdingPeriodDays,
+      filerStatus,
+    );
+    const costBasis = qty * lot.costPerShare * (1 + NCCPL_EXPENSE_RATE);
+    const proceeds = qty * salePricePerShare * (1 - NCCPL_EXPENSE_RATE);
+    const realizedGain = proceeds - costBasis;
+    disposalRows.push({
+      sessionId,
+      lotId: lot.id,
+      saleDate,
+      quantitySold: qty,
+      salePricePerShare,
+      saleCommission: 0,
+      costBasis,
+      proceeds,
+      realizedGain,
+      holdingPeriodDays,
+      cgtRateApplied,
+      cgtAmount: realizedGain > 0 ? realizedGain * cgtRateApplied : 0,
+      fiscalYear: getFiscalYear(saleDate),
+    });
+    lotUpdates.push({ id: lot.id, newQty: lot.quantityRemaining - qty });
+    remaining -= qty;
+  }
+
+  await db.insert(portfolioDisposals).values(disposalRows);
+  for (const upd of lotUpdates) {
+    await db
+      .update(portfolioLots)
+      .set({ quantityRemaining: upd.newQty, updatedAt: new Date() })
+      .where(and(eq(portfolioLots.id, upd.id), eq(portfolioLots.sessionId, sessionId)));
+  }
+
+  const totalGain = disposalRows.reduce((s, d) => s + d.realizedGain, 0);
+  const totalCgt = disposalRows.reduce((s, d) => s + d.cgtAmount, 0);
+  res.json({ ok: true, lotsConsumed: disposalRows.length, totalRealizedGain: totalGain, totalCgt, fiscalYear: getFiscalYear(saleDate) });
 });
 
 router.delete('/portfolio/lots/by-symbol/:symbol', async (req, res) => {
