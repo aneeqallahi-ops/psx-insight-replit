@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { PSXApi } from '../lib/psx-api';
+import { describeMarketStatusFromSchedule } from '../lib/market-status';
 import type { Dividend, Fundamentals, Tick } from '../lib/types';
 import { db } from '@workspace/db';
 import { portfolioHoldings, taxProfiles, portfolioLots, type PortfolioLot } from '@workspace/db/schema';
@@ -43,17 +44,42 @@ interface PortfolioHoldingData {
   error?: string;
 }
 
+function syntheticTickFromFundamentals(symbol: string, fund: Fundamentals): Tick {
+  const schedule = describeMarketStatusFromSchedule();
+  return {
+    symbol,
+    market: 'REG',
+    st: schedule.isOpen ? 'OPN' : 'CLS',
+    price: fund.price,
+    change: +(fund.price * (fund.changePercent / 100)).toFixed(2),
+    changePercent: fund.changePercent / 100,
+    volume: fund.volume30Avg,
+    trades: 0,
+    value: 0,
+    timestamp: fund.timestamp ? new Date(fund.timestamp).getTime() : Date.now(),
+  };
+}
+
 async function fetchHolding(symbol: string): Promise<PortfolioHoldingData> {
-  try {
-    const [tick, fundamentals, dividends] = await Promise.all([
-      PSXApi.getTick('REG', symbol),
-      PSXApi.getFundamentals(symbol),
-      PSXApi.getDividends(symbol),
-    ]);
-    return { symbol, tick, fundamentals, dividends };
-  } catch (error) {
-    return { symbol, tick: null, fundamentals: null, dividends: [], error: error instanceof Error ? error.message : `Unable to load ${symbol}` };
+  const [tickR, fundamentalsR, dividendsR] = await Promise.allSettled([
+    PSXApi.getTick('REG', symbol),
+    PSXApi.getFundamentals(symbol),
+    PSXApi.getDividends(symbol),
+  ]);
+
+  const fundamentals = fundamentalsR.status === 'fulfilled' ? fundamentalsR.value : null;
+  const dividends = dividendsR.status === 'fulfilled' ? dividendsR.value : [];
+
+  let tick: Tick | null = tickR.status === 'fulfilled' ? tickR.value : null;
+  if (!tick && fundamentals) {
+    tick = syntheticTickFromFundamentals(symbol, fundamentals);
   }
+
+  const error = !tick && !fundamentals
+    ? (tickR.status === 'rejected' ? String(tickR.reason) : `Unable to load ${symbol}`)
+    : undefined;
+
+  return { symbol, tick, fundamentals, dividends, ...(error ? { error } : {}) };
 }
 
 async function runLimited<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>) {
