@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, ChevronDown, ChevronUp, ClipboardCheck, Copy, Key, Layers, Pencil, PieChart, Search, Trash2, X } from 'lucide-react';
+import { Bell, ChevronDown, ChevronUp, ClipboardCheck, Copy, Key, Layers, Pencil, PieChart, Search, Trash2, TrendingDown, X } from 'lucide-react';
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { PortfolioReviewModal } from '@/components/agent/portfolio-review-modal';
 import { LotView } from '@/components/lot-view';
@@ -15,10 +15,11 @@ import {
   makeHolding,
   savePortfolioToApi,
   saveTaxProfileToApi,
+  sellLotsApi,
   setPortfolioKey,
   upsertHolding,
 } from '@/lib/portfolio';
-import type { FilerStatus, Holding, TaxProfile } from '@/lib/portfolio';
+import type { FilerStatus, Holding, SellResult, TaxProfile } from '@/lib/portfolio';
 import type { Dividend, Fundamentals, Tick } from '@/lib/types';
 
 interface SymbolsResponse { symbols: string[]; updatedAt: number; }
@@ -274,6 +275,94 @@ function EmptyState() {
   );
 }
 
+function SellPositionModal({ holding, onClose, onSold }: { holding: Holding; onClose: () => void; onSold: () => void }) {
+  const [qty, setQty] = useState('');
+  const [price, setPrice] = useState('');
+  const [saleDate, setSaleDate] = useState(today());
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<SellResult | null>(null);
+
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const parsedQty = Number(qty);
+    const parsedPrice = Number(price);
+    if (!Number.isFinite(parsedQty) || parsedQty <= 0) { setError('Enter a valid quantity.'); return; }
+    if (parsedQty > holding.shares + 1e-9) { setError(`Max: ${holding.shares} shares.`); return; }
+    if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) { setError('Enter a valid sale price.'); return; }
+    setError('');
+    setLoading(true);
+    try {
+      const res = await sellLotsApi({ symbol: holding.symbol, quantitySold: parsedQty, salePricePerShare: parsedPrice, saleDate });
+      setResult(res);
+      onSold();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sale failed — please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 px-4">
+      <div className="w-full max-w-lg rounded border border-line bg-panel p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-semibold text-white">Record Sale — {holding.symbol}</h2>
+            <p className="mt-1 text-sm text-gray-400">Lots consumed oldest-first (FIFO). Both Positions and Lots views will update.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded border border-line p-2 text-gray-400 hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button>
+        </div>
+
+        {result ? (
+          <div className="mt-5 flex flex-col gap-4">
+            <div className="rounded border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+              Sale recorded across {result.lotsConsumed} {result.lotsConsumed === 1 ? 'lot' : 'lots'}.
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded border border-line bg-black/20 p-3">
+                <p className="text-xs uppercase text-gray-500">Realized Gain</p>
+                <p className={`mt-1 text-lg font-semibold ${result.totalRealizedGain >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'PKR', maximumFractionDigits: 2 }).format(result.totalRealizedGain)}</p>
+              </div>
+              <div className="rounded border border-line bg-black/20 p-3">
+                <p className="text-xs uppercase text-gray-500">CGT ({result.fiscalYear})</p>
+                <p className="mt-1 text-lg font-semibold text-amber-300">{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'PKR', maximumFractionDigits: 2 }).format(result.totalCgt)}</p>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500">NCCPL 0.5% standard expense applied to both buy and sell sides.</p>
+            <button type="button" onClick={onClose} className="w-full rounded border border-line py-2 text-sm text-gray-300 hover:text-white">Close</button>
+          </div>
+        ) : (
+          <form onSubmit={submit} className="mt-5 flex flex-col gap-4">
+            <div className="rounded border border-line bg-black/20 px-4 py-3 text-sm text-gray-400">
+              Available: <span className="font-semibold text-white">{holding.shares} shares</span> · avg cost <span className="text-gray-300">{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'PKR', maximumFractionDigits: 2 }).format(holding.avgBuyPrice)}</span>
+            </div>
+            <label className="text-sm text-gray-300">Quantity to sell
+              <input value={qty} onChange={(e) => setQty(e.target.value)} type="number" min="1" step="1" max={holding.shares} placeholder={`Max ${holding.shares}`}
+                className="mt-2 h-11 w-full rounded border border-line bg-black/20 px-3 text-white outline-none placeholder:text-gray-600 focus:border-coral/60" />
+            </label>
+            <label className="text-sm text-gray-300">Sale price per share (PKR)
+              <input value={price} onChange={(e) => setPrice(e.target.value)} type="number" min="0.01" step="0.01" placeholder="PKR"
+                className="mt-2 h-11 w-full rounded border border-line bg-black/20 px-3 text-white outline-none placeholder:text-gray-600 focus:border-coral/60" />
+            </label>
+            <label className="text-sm text-gray-300">Sale date
+              <input value={saleDate} onChange={(e) => setSaleDate(e.target.value)} type="date"
+                className="mt-2 h-11 w-full rounded border border-line bg-black/20 px-3 text-white outline-none focus:border-coral/60" />
+            </label>
+            {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+            <div className="flex gap-3">
+              <button type="button" onClick={onClose} className="flex-1 rounded border border-line py-2.5 text-sm text-gray-300 hover:text-white">Cancel</button>
+              <button type="submit" disabled={loading} className="flex-1 rounded border border-rose-400/60 bg-rose-400/15 py-2.5 text-sm font-semibold text-rose-200 transition hover:bg-rose-400/25 disabled:opacity-50">
+                {loading ? 'Recording…' : 'Record Sale'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function PortfolioPage() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [taxProfile, setTaxProfile] = useState<TaxProfile | null>(null);
@@ -286,6 +375,7 @@ export function PortfolioPage() {
   const [toast, setToast] = useState('');
   const [expandedSymbol, setExpandedSymbol] = useState('');
   const [view, setView] = useState<'positions' | 'lots'>('positions');
+  const [sellTarget, setSellTarget] = useState<Holding | null>(null);
   const queryClient = useQueryClient();
   const [priceFlashes, setPriceFlashes] = useState<Record<string, 'up' | 'down'>>({});
   const previousPricesRef = useRef(new Map<string, number>());
@@ -446,6 +536,15 @@ export function PortfolioPage() {
       // best-effort; the position is already gone from the legacy table
     }
     showToast(`${symbol} removed.`);
+  }
+
+  async function handleSold() {
+    // Re-fetch positions from server (sell endpoint already updated portfolio_holdings).
+    try {
+      const refreshed = await fetchPortfolioFromApi();
+      setHoldings(refreshed);
+    } catch { /* non-fatal */ }
+    queryClient.invalidateQueries({ queryKey: ['portfolio-lots-snapshot'] });
   }
 
   function handleImportKey(key: string): boolean {
@@ -610,6 +709,7 @@ export function PortfolioPage() {
                             </td>
                             <td className="py-4 pl-4 align-top">
                               <div className="flex gap-2">
+                                <button type="button" onClick={() => setSellTarget(row.holding)} className="flex items-center gap-1.5 rounded border border-rose-400/40 bg-rose-400/10 px-2.5 py-1.5 text-xs font-semibold text-rose-200 transition hover:bg-rose-400/20" aria-label={`Sell ${row.holding.symbol}`}><TrendingDown className="h-3.5 w-3.5" />Sell</button>
                                 <button type="button" onClick={() => editHolding(row.holding)} className="rounded border border-line p-2 text-gray-400 transition hover:text-coral" aria-label={`Edit ${row.holding.symbol}`}><Pencil className="h-4 w-4" /></button>
                                 <button type="button" onClick={() => removeHolding(row.holding.symbol)} className="rounded border border-line p-2 text-gray-400 transition hover:text-rose-200" aria-label={`Remove ${row.holding.symbol}`}><Trash2 className="h-4 w-4" /></button>
                               </div>
@@ -662,6 +762,8 @@ export function PortfolioPage() {
           </div>
         </div>
       ) : null}
+
+      {sellTarget ? <SellPositionModal holding={sellTarget} onClose={() => setSellTarget(null)} onSold={handleSold} /> : null}
 
       {toast ? <div className="fixed bottom-5 right-5 z-50 rounded border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100 shadow-xl">{toast}</div> : null}
 

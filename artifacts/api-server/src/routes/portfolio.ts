@@ -434,6 +434,23 @@ router.post('/portfolio/lots/sell', async (req, res) => {
       .where(and(eq(portfolioLots.id, upd.id), eq(portfolioLots.sessionId, sessionId)));
   }
 
+  // Keep portfolio_holdings in sync so the Positions view reflects the sale.
+  const holdingRows = await db
+    .select()
+    .from(portfolioHoldings)
+    .where(and(eq(portfolioHoldings.sessionId, sessionId), eq(portfolioHoldings.symbol, upperSymbol)));
+  if (holdingRows.length > 0) {
+    const newShares = holdingRows[0].shares - quantitySold;
+    if (newShares <= 1e-9) {
+      await db.delete(portfolioHoldings)
+        .where(and(eq(portfolioHoldings.sessionId, sessionId), eq(portfolioHoldings.symbol, upperSymbol)));
+    } else {
+      await db.update(portfolioHoldings)
+        .set({ shares: newShares })
+        .where(and(eq(portfolioHoldings.sessionId, sessionId), eq(portfolioHoldings.symbol, upperSymbol)));
+    }
+  }
+
   const totalGain = disposalRows.reduce((s, d) => s + d.realizedGain, 0);
   const totalCgt = disposalRows.reduce((s, d) => s + d.cgtAmount, 0);
   res.json({ ok: true, lotsConsumed: disposalRows.length, totalRealizedGain: totalGain, totalCgt, fiscalYear: getFiscalYear(saleDate) });

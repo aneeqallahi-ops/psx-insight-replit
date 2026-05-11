@@ -1,9 +1,9 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp, Info, Layers, TrendingDown } from 'lucide-react';
-import { FormEvent, Fragment, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { ChevronDown, ChevronUp, Info, Layers } from 'lucide-react';
+import { Fragment, useMemo, useState } from 'react';
 import { useMarketStatus } from '@/hooks/useMarketStatus';
-import { fetchLotsSnapshot, REGIME_LABELS, sellLotsApi } from '@/lib/portfolio';
-import type { LotSnapshot, SellResult } from '@/lib/portfolio';
+import { fetchLotsSnapshot, REGIME_LABELS } from '@/lib/portfolio';
+import type { LotSnapshot } from '@/lib/portfolio';
 
 function money(value: number | null) {
   if (value === null || !Number.isFinite(value)) return '--';
@@ -25,7 +25,6 @@ function fmtDays(days: number) {
   if (days < 730) return `${Math.floor(days / 30)}mo`;
   return `${(days / 365).toFixed(1)}y`;
 }
-function today() { return new Date().toISOString().slice(0, 10); }
 
 interface SymbolGroup {
   symbol: string;
@@ -44,16 +43,7 @@ function groupBySymbol(lots: LotSnapshot[]): SymbolGroup[] {
     if (lot.quantityRemaining <= 0) continue;
     let group = map.get(lot.symbol);
     if (!group) {
-      group = {
-        symbol: lot.symbol,
-        lots: [],
-        totalQuantity: 0,
-        totalInvested: 0,
-        totalCurrentValue: 0,
-        totalUnrealized: 0,
-        totalProjectedCgt: 0,
-        hasMissingPrice: false,
-      };
+      group = { symbol: lot.symbol, lots: [], totalQuantity: 0, totalInvested: 0, totalCurrentValue: 0, totalUnrealized: 0, totalProjectedCgt: 0, hasMissingPrice: false };
       map.set(lot.symbol, group);
     }
     group.lots.push(lot);
@@ -70,129 +60,7 @@ function groupBySymbol(lots: LotSnapshot[]): SymbolGroup[] {
   return Array.from(map.values()).sort((a, b) => b.totalCurrentValue - a.totalCurrentValue);
 }
 
-interface SellModalProps {
-  group: SymbolGroup;
-  onClose: () => void;
-  onSold: () => void;
-}
-
-function SellModal({ group, onClose, onSold }: SellModalProps) {
-  const [qty, setQty] = useState('');
-  const [price, setPrice] = useState('');
-  const [saleDate, setSaleDate] = useState(today());
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<SellResult | null>(null);
-
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    const parsedQty = Number(qty);
-    const parsedPrice = Number(price);
-    if (!Number.isFinite(parsedQty) || parsedQty <= 0) { setError('Enter a valid quantity.'); return; }
-    if (parsedQty > group.totalQuantity + 1e-9) { setError(`Max available: ${commaNumber(group.totalQuantity)} shares.`); return; }
-    if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) { setError('Enter a valid sale price.'); return; }
-    setError('');
-    setLoading(true);
-    try {
-      const res = await sellLotsApi({ symbol: group.symbol, quantitySold: parsedQty, salePricePerShare: parsedPrice, saleDate });
-      setResult(res);
-      onSold();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sale failed — please try again.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 px-4">
-      <div className="w-full max-w-lg rounded border border-line bg-panel p-6 shadow-2xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-semibold text-white">Record Sale — {group.symbol}</h2>
-            <p className="mt-1 text-sm text-gray-400">Lots are consumed oldest-first (FIFO). CGT is calculated per lot at the applicable rate.</p>
-          </div>
-          <button type="button" onClick={onClose} className="rounded border border-line p-2 text-gray-400 hover:text-white" aria-label="Close">✕</button>
-        </div>
-
-        {result ? (
-          <div className="mt-5 flex flex-col gap-4">
-            <div className="rounded border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
-              Sale recorded across {result.lotsConsumed} {result.lotsConsumed === 1 ? 'lot' : 'lots'}.
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <ResultCard label="Realized Gain" value={money(result.totalRealizedGain)} tone={result.totalRealizedGain >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
-              <ResultCard label={`CGT (${result.fiscalYear})`} value={money(result.totalCgt)} tone="text-amber-300" />
-            </div>
-            <p className="text-xs text-gray-500">CGT amount shown is what would be withheld at source. NCCPL 0.5% standard expense applied to both buy and sell sides.</p>
-            <button type="button" onClick={onClose} className="mt-2 w-full rounded border border-line py-2 text-sm text-gray-300 hover:text-white">Close</button>
-          </div>
-        ) : (
-          <form onSubmit={submit} className="mt-5 flex flex-col gap-4">
-            <div className="rounded border border-line bg-black/20 px-4 py-3 text-sm text-gray-400">
-              Available: <span className="font-semibold text-white">{commaNumber(group.totalQuantity)} shares</span> across {group.lots.length} {group.lots.length === 1 ? 'lot' : 'lots'}
-            </div>
-
-            <label className="text-sm text-gray-300">Quantity to sell
-              <input
-                value={qty}
-                onChange={(e) => setQty(e.target.value)}
-                type="number"
-                min="1"
-                step="1"
-                max={group.totalQuantity}
-                placeholder={`Max ${commaNumber(group.totalQuantity)}`}
-                className="mt-2 h-11 w-full rounded border border-line bg-black/20 px-3 text-white outline-none placeholder:text-gray-600 focus:border-coral/60"
-              />
-            </label>
-
-            <label className="text-sm text-gray-300">Sale price per share (PKR)
-              <input
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                type="number"
-                min="0.01"
-                step="0.01"
-                placeholder="PKR"
-                className="mt-2 h-11 w-full rounded border border-line bg-black/20 px-3 text-white outline-none placeholder:text-gray-600 focus:border-coral/60"
-              />
-            </label>
-
-            <label className="text-sm text-gray-300">Sale date
-              <input
-                value={saleDate}
-                onChange={(e) => setSaleDate(e.target.value)}
-                type="date"
-                className="mt-2 h-11 w-full rounded border border-line bg-black/20 px-3 text-white outline-none focus:border-coral/60"
-              />
-            </label>
-
-            {error ? <p className="text-sm text-rose-300">{error}</p> : null}
-
-            <div className="flex gap-3">
-              <button type="button" onClick={onClose} className="flex-1 rounded border border-line py-2.5 text-sm text-gray-300 hover:text-white">Cancel</button>
-              <button type="submit" disabled={loading} className="flex-1 rounded border border-rose-400/60 bg-rose-400/15 py-2.5 text-sm font-semibold text-rose-200 transition hover:bg-rose-400/25 disabled:opacity-50">
-                {loading ? 'Recording…' : 'Record Sale'}
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ResultCard({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="rounded border border-line bg-black/20 p-3">
-      <p className="text-xs uppercase text-gray-500">{label}</p>
-      <p className={`mt-1 text-lg font-semibold ${tone ?? 'text-white'}`}>{value}</p>
-    </div>
-  );
-}
-
 export function LotView() {
-  const queryClient = useQueryClient();
   const marketStatusQuery = useMarketStatus();
   const isMarketOpen = marketStatusQuery.data?.isOpen ?? false;
   const snapshotQuery = useQuery({
@@ -202,90 +70,58 @@ export function LotView() {
     refetchOnWindowFocus: isMarketOpen,
   });
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [sellTarget, setSellTarget] = useState<SymbolGroup | null>(null);
 
   const groups = useMemo(() => groupBySymbol(snapshotQuery.data?.lots ?? []), [snapshotQuery.data?.lots]);
-  const totals = useMemo(() => {
-    return groups.reduce(
-      (acc, g) => ({
-        invested: acc.invested + g.totalInvested,
-        currentValue: acc.currentValue + g.totalCurrentValue,
-        unrealized: acc.unrealized + g.totalUnrealized,
-        projectedCgt: acc.projectedCgt + g.totalProjectedCgt,
-      }),
-      { invested: 0, currentValue: 0, unrealized: 0, projectedCgt: 0 },
-    );
-  }, [groups]);
-
-  function handleSold() {
-    queryClient.invalidateQueries({ queryKey: ['portfolio-lots-snapshot'] });
-  }
+  const totals = useMemo(() => groups.reduce(
+    (acc, g) => ({ invested: acc.invested + g.totalInvested, currentValue: acc.currentValue + g.totalCurrentValue, unrealized: acc.unrealized + g.totalUnrealized, projectedCgt: acc.projectedCgt + g.totalProjectedCgt }),
+    { invested: 0, currentValue: 0, unrealized: 0, projectedCgt: 0 },
+  ), [groups]);
 
   if (snapshotQuery.isLoading) {
     return <div className="rounded border border-line bg-panel p-6 text-sm text-gray-500">Loading lots&hellip;</div>;
   }
-
   if (snapshotQuery.error) {
-    const message = snapshotQuery.error instanceof Error ? snapshotQuery.error.message : 'Failed to load lots.';
-    return (
-      <div className="rounded border border-rose-400/30 bg-rose-400/10 p-4 text-sm text-rose-100">{message}</div>
-    );
+    return <div className="rounded border border-rose-400/30 bg-rose-400/10 p-4 text-sm text-rose-100">{snapshotQuery.error instanceof Error ? snapshotQuery.error.message : 'Failed to load lots.'}</div>;
   }
-
   if (groups.length === 0) {
     return (
       <div className="grid place-items-center rounded border border-dashed border-line bg-panel px-6 py-16 text-center">
         <Layers className="h-10 w-10 text-coral" aria-hidden="true" />
         <h2 className="mt-4 text-xl font-semibold text-white">No lots yet</h2>
-        <p className="mt-2 max-w-md text-sm text-gray-500">Add positions on the Add Position card above. Each purchase becomes a lot for accurate FIFO/CGT tracking.</p>
+        <p className="mt-2 max-w-md text-sm text-gray-500">Add positions above. Each purchase becomes a separate lot for accurate FIFO / CGT tracking.</p>
       </div>
     );
   }
 
   const filerStatus = snapshotQuery.data?.filerStatus ?? 'filer';
-  const showBackfillNotice = Boolean(snapshotQuery.data?.notice);
 
   return (
     <div className="flex flex-col gap-4">
-      {showBackfillNotice ? (
+      {snapshotQuery.data?.notice ? (
         <div className="flex items-start gap-3 rounded border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
           <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <p>{snapshotQuery.data!.notice}</p>
+          <p>{snapshotQuery.data.notice}</p>
         </div>
       ) : null}
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryCard label="Invested (cost)" value={money(totals.invested)} />
         <SummaryCard label="Current Value" value={money(totals.currentValue)} />
-        <SummaryCard
-          label="Unrealized Gain"
-          value={money(totals.unrealized)}
-          subtext={ratioPercent(totals.invested > 0 ? totals.unrealized / totals.invested : 0)}
-          tone={totals.unrealized >= 0 ? 'text-emerald-300' : 'text-rose-300'}
-        />
-        <SummaryCard
-          label="Projected CGT if sold today"
-          value={money(totals.projectedCgt)}
-          subtext={`Filer: ${filerStatus === 'filer' ? 'ATL' : 'Non-filer'} · uses NCCPL 0.5%`}
-          tone="text-amber-300"
-        />
+        <SummaryCard label="Unrealized Gain" value={money(totals.unrealized)} subtext={ratioPercent(totals.invested > 0 ? totals.unrealized / totals.invested : 0)} tone={totals.unrealized >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
+        <SummaryCard label="Projected CGT if sold today" value={money(totals.projectedCgt)} subtext={`Filer: ${filerStatus === 'filer' ? 'ATL' : 'Non-filer'} · uses NCCPL 0.5%`} tone="text-amber-300" />
       </section>
 
       <section className="rounded border border-line bg-panel p-5">
         <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-white">Lots by symbol</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              {isMarketOpen ? 'Live prices refresh every 15 seconds.' : 'Market is closed - prices are last-traded.'}
-            </p>
+            <p className="mt-1 text-sm text-gray-500">{isMarketOpen ? 'Live prices refresh every 15 seconds.' : 'Market is closed - prices are last-traded.'}</p>
           </div>
-          <p className="text-sm text-gray-500">
-            {snapshotQuery.isFetching ? 'Refreshing' : snapshotQuery.data?.asOf ? `Last updated ${new Date(snapshotQuery.data.asOf).toLocaleTimeString()}` : ''}
-          </p>
+          <p className="text-sm text-gray-500">{snapshotQuery.isFetching ? 'Refreshing' : snapshotQuery.data?.asOf ? `Last updated ${new Date(snapshotQuery.data.asOf).toLocaleTimeString()}` : ''}</p>
         </div>
 
         <div className="mt-5 overflow-x-auto">
-          <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
+          <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
             <thead>
               <tr className="border-b border-line text-xs uppercase text-gray-500">
                 <th className="px-3 py-3 font-medium first:pl-0">Symbol / Lot</th>
@@ -296,8 +132,7 @@ export function LotView() {
                 <th className="px-3 py-3 font-medium">Cost / Share</th>
                 <th className="px-3 py-3 font-medium">Current</th>
                 <th className="px-3 py-3 font-medium">Unrealized</th>
-                <th className="px-3 py-3 font-medium">CGT if sold</th>
-                <th className="px-3 py-3 font-medium last:pr-0">Actions</th>
+                <th className="px-3 py-3 font-medium last:pr-0">CGT if sold</th>
               </tr>
             </thead>
             <tbody>
@@ -309,16 +144,10 @@ export function LotView() {
                   <Fragment key={group.symbol}>
                     <tr className="border-b border-line bg-black/20">
                       <td className="px-3 py-3 first:pl-0">
-                        <button
-                          type="button"
-                          onClick={() => setExpanded((prev) => ({ ...prev, [group.symbol]: !isOpen }))}
-                          className="flex items-center gap-2 font-semibold text-coral"
-                        >
+                        <button type="button" onClick={() => setExpanded((prev) => ({ ...prev, [group.symbol]: !isOpen }))} className="flex items-center gap-2 font-semibold text-coral">
                           {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                           {group.symbol}
-                          <span className="rounded border border-line bg-black/30 px-2 py-0.5 text-xs font-medium text-gray-400">
-                            {group.lots.length} {group.lots.length === 1 ? 'lot' : 'lots'}
-                          </span>
+                          <span className="rounded border border-line bg-black/30 px-2 py-0.5 text-xs font-medium text-gray-400">{group.lots.length} {group.lots.length === 1 ? 'lot' : 'lots'}</span>
                         </button>
                       </td>
                       <td className="px-3 py-3 text-gray-500" colSpan={3}>—</td>
@@ -329,57 +158,39 @@ export function LotView() {
                         {money(group.totalUnrealized)}
                         <span className="ml-2 text-xs font-normal">{ratioPercent(investedPercent)}</span>
                       </td>
-                      <td className="px-3 py-3 font-semibold text-amber-300">{money(group.totalProjectedCgt)}</td>
-                      <td className="px-3 py-3 last:pr-0">
-                        <button
-                          type="button"
-                          onClick={() => setSellTarget(group)}
-                          className="flex items-center gap-1.5 rounded border border-rose-400/40 bg-rose-400/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition hover:bg-rose-400/20"
-                        >
-                          <TrendingDown className="h-3.5 w-3.5" />
-                          Sell
-                        </button>
-                      </td>
+                      <td className="px-3 py-3 last:pr-0 font-semibold text-amber-300">{money(group.totalProjectedCgt)}</td>
                     </tr>
-
-                    {isOpen
-                      ? group.lots.map((lot) => {
-                          const regime = REGIME_LABELS[lot.acquisitionRegime];
-                          const positive = (lot.unrealizedGain ?? 0) >= 0;
-                          return (
-                            <tr key={lot.id} className="border-b border-line/60 hover:bg-white/[0.03]">
-                              <td className="px-3 py-3 first:pl-8 text-gray-300">
-                                Lot #{lot.id}
-                                {lot.drip ? (
-                                  <span className="ml-2 rounded border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 text-[10px] uppercase text-emerald-200">DRIP</span>
-                                ) : null}
-                              </td>
-                              <td className="px-3 py-3 text-gray-300">{lot.acquisitionDate}</td>
-                              <td className="px-3 py-3">
-                                <span className={`inline-flex rounded border px-2 py-0.5 text-[11px] font-medium ${regime.tone}`} title={regime.label}>
-                                  {regime.short}
-                                </span>
-                              </td>
-                              <td className="px-3 py-3 text-gray-400">{fmtDays(lot.holdingDays)}</td>
-                              <td className="px-3 py-3 text-gray-200">{commaNumber(lot.quantityRemaining)}</td>
-                              <td className="px-3 py-3 text-gray-300">{money(lot.costPerShare)}</td>
-                              <td className="px-3 py-3 text-gray-300">
-                                {money(lot.currentPrice)}
-                                {lot.priceError ? <p className="text-xs text-rose-300">{lot.priceError}</p> : null}
-                              </td>
-                              <td className={`px-3 py-3 font-medium ${positive ? 'text-emerald-300' : 'text-rose-300'}`}>
-                                {money(lot.unrealizedGain)}
-                                <span className="ml-2 text-xs font-normal">{ratioPercent(lot.unrealizedGainPercent)}</span>
-                              </td>
-                              <td className="px-3 py-3 text-amber-300">
-                                {money(lot.projectedCgtIfSoldToday)}
-                                <span className="ml-2 text-xs font-normal text-gray-500">@ {rateAsPercent(lot.cgtRateIfSoldToday)}</span>
-                              </td>
-                              <td className="px-3 py-3 last:pr-0" />
-                            </tr>
-                          );
-                        })
-                      : null}
+                    {isOpen ? group.lots.map((lot) => {
+                      const regime = REGIME_LABELS[lot.acquisitionRegime];
+                      const positive = (lot.unrealizedGain ?? 0) >= 0;
+                      return (
+                        <tr key={lot.id} className="border-b border-line/60 hover:bg-white/[0.03]">
+                          <td className="px-3 py-3 first:pl-8 text-gray-300">
+                            Lot #{lot.id}
+                            {lot.drip ? <span className="ml-2 rounded border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 text-[10px] uppercase text-emerald-200">DRIP</span> : null}
+                          </td>
+                          <td className="px-3 py-3 text-gray-300">{lot.acquisitionDate}</td>
+                          <td className="px-3 py-3">
+                            <span className={`inline-flex rounded border px-2 py-0.5 text-[11px] font-medium ${regime.tone}`} title={regime.label}>{regime.short}</span>
+                          </td>
+                          <td className="px-3 py-3 text-gray-400">{fmtDays(lot.holdingDays)}</td>
+                          <td className="px-3 py-3 text-gray-200">{commaNumber(lot.quantityRemaining)}</td>
+                          <td className="px-3 py-3 text-gray-300">{money(lot.costPerShare)}</td>
+                          <td className="px-3 py-3 text-gray-300">
+                            {money(lot.currentPrice)}
+                            {lot.priceError ? <p className="text-xs text-rose-300">{lot.priceError}</p> : null}
+                          </td>
+                          <td className={`px-3 py-3 font-medium ${positive ? 'text-emerald-300' : 'text-rose-300'}`}>
+                            {money(lot.unrealizedGain)}
+                            <span className="ml-2 text-xs font-normal">{ratioPercent(lot.unrealizedGainPercent)}</span>
+                          </td>
+                          <td className="px-3 py-3 last:pr-0 text-amber-300">
+                            {money(lot.projectedCgtIfSoldToday)}
+                            <span className="ml-2 text-xs font-normal text-gray-500">@ {rateAsPercent(lot.cgtRateIfSoldToday)}</span>
+                          </td>
+                        </tr>
+                      );
+                    }) : null}
                   </Fragment>
                 );
               })}
@@ -391,14 +202,6 @@ export function LotView() {
           Projected CGT applies the FY26 rate that would apply if the lot were sold today, after a 0.5% NCCPL standard expense on both buy and sell. Rates are read from <code className="rounded bg-black/30 px-1 py-0.5 text-coral">cgt_rate_config</code> and never hardcoded.
         </p>
       </section>
-
-      {sellTarget ? (
-        <SellModal
-          group={sellTarget}
-          onClose={() => setSellTarget(null)}
-          onSold={handleSold}
-        />
-      ) : null}
     </div>
   );
 }
