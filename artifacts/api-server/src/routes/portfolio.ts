@@ -250,16 +250,17 @@ router.get('/portfolio/lots/snapshot', async (req, res) => {
   const filerStatus: 'filer' | 'non-filer' =
     profileRows[0]?.filerStatus === 'non-filer' ? 'non-filer' : 'filer';
 
-  // Fetch live ticks for unique symbols only.
+  // Fetch live ticks for unique symbols only; fall back to fundamentals if REG tick is unavailable.
   const uniqueSymbols = Array.from(new Set(lots.map((l) => l.symbol)));
   const tickResults = await Promise.all(
     uniqueSymbols.map(async (symbol) => {
-      try {
-        const tick = await PSXApi.getTick('REG', symbol);
-        return [symbol, tick] as const;
-      } catch {
-        return [symbol, null] as const;
-      }
+      const [tickR, fundR] = await Promise.allSettled([
+        PSXApi.getTick('REG', symbol),
+        PSXApi.getFundamentals(symbol),
+      ]);
+      if (tickR.status === 'fulfilled') return [symbol, tickR.value] as const;
+      if (fundR.status === 'fulfilled') return [symbol, syntheticTickFromFundamentals(symbol, fundR.value)] as const;
+      return [symbol, null] as const;
     }),
   );
   const tickBySymbol = new Map<string, Tick | null>(tickResults);
