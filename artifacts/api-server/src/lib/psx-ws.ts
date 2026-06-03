@@ -31,8 +31,13 @@ const WS_URL = BASE_URL.replace(/^http/, 'ws') + '/rt';
 // movers/breadth use; add more here if routes start needing them.
 const SUBSCRIBED_MARKETS = ['REG'] as const;
 
-const RECONNECT_BASE_MS = 2_000;
-const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_BASE_MS = 5_000;
+const RECONNECT_MAX_MS = 60_000;
+// Only treat a connection as "healthy" (and reset backoff) once it has stayed
+// open this long. Without this, a connect->immediate-close cycle (e.g. the
+// server dropping idle subscriptions while the market is closed) resets the
+// backoff every time and produces a tight reconnect loop.
+const STABLE_AFTER_MS = 30_000;
 
 interface Snapshot {
   /** Raw decoded `marketData` payload per market type (shape TBD at market open). */
@@ -52,6 +57,7 @@ const snapshot: Snapshot = {
 
 let ws: WebSocket | null = null;
 let reconnectAttempts = 0;
+let stableTimer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
 let reqCounter = 0;
 
@@ -186,9 +192,12 @@ async function connect(): Promise<void> {
   ws = socket;
 
   socket.addEventListener('open', () => {
-    reconnectAttempts = 0;
     snapshot.connectedAt = Date.now();
     subscribeAll(socket);
+    // Reset backoff only after the connection proves stable, so rapid
+    // open/close cycles back off instead of looping.
+    if (stableTimer) clearTimeout(stableTimer);
+    stableTimer = setTimeout(() => { reconnectAttempts = 0; }, STABLE_AFTER_MS);
   });
 
   socket.addEventListener('message', (event: MessageEvent) => {
@@ -208,6 +217,7 @@ async function connect(): Promise<void> {
   socket.addEventListener('close', (event: CloseEvent) => {
     snapshot.connectedAt = null;
     if (ws === socket) ws = null;
+    if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
     logger.warn({ code: (event as CloseEvent).code }, 'PSX WS closed');
     scheduleReconnect();
   });
