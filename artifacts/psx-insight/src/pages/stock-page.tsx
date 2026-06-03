@@ -172,23 +172,64 @@ function StockHeader({ symbol, tick, updatedAt, isMarketOpen, marketStatusLabel 
   );
 }
 
+// Axis tick format, full tooltip/range format, and a human label per timeframe.
+// Intraday frames need the time of day; daily+ frames only need the date.
+const TF_TICK: Record<Timeframe, string> = {
+  '1m': 'HH:mm', '5m': 'HH:mm', '15m': 'HH:mm',
+  '1h': 'dd MMM HH:mm', '4h': 'dd MMM HH:mm',
+  '1d': 'dd MMM', '1w': 'dd MMM', '1M': 'MMM yy',
+};
+const TF_FULL: Record<Timeframe, string> = {
+  '1m': 'dd MMM yyyy, HH:mm', '5m': 'dd MMM yyyy, HH:mm', '15m': 'dd MMM yyyy, HH:mm',
+  '1h': 'dd MMM yyyy, HH:mm', '4h': 'dd MMM yyyy, HH:mm',
+  '1d': 'dd MMM yyyy', '1w': 'dd MMM yyyy', '1M': 'MMM yyyy',
+};
+const TF_DESC: Record<Timeframe, string> = {
+  '1m': '1-minute', '5m': '5-minute', '15m': '15-minute', '1h': '1-hour',
+  '4h': '4-hour', '1d': 'Daily', '1w': 'Weekly', '1M': 'Monthly',
+};
+
 function PriceChart({ symbol, klines, timeframe, onTimeframeChange, isLoading }: { symbol: string; klines: Kline[]; timeframe: Timeframe; onTimeframeChange: (t: Timeframe) => void; isLoading: boolean }) {
-  const chartData = useMemo(() => klines.map((item) => ({ ...item, label: format(new Date(item.timestamp), 'dd MMM') })), [klines]);
+  const tickFmt = TF_TICK[timeframe] ?? 'dd MMM';
+  const fullFmt = TF_FULL[timeframe] ?? 'dd MMM yyyy';
+  const chartData = useMemo(
+    () => klines.map((item) => ({
+      ...item,
+      label: format(new Date(item.timestamp), tickFmt),
+      fullLabel: format(new Date(item.timestamp), fullFmt),
+    })),
+    [klines, tickFmt, fullFmt],
+  );
+  const rangeLabel = useMemo(() => {
+    if (!klines.length) return '';
+    const first = format(new Date(klines[0].timestamp), fullFmt);
+    const last = format(new Date(klines[klines.length - 1].timestamp), fullFmt);
+    return first === last ? first : `${first}  →  ${last}`;
+  }, [klines, fullFmt]);
+
+  const tooltipLabel = (_: unknown, payload: ReadonlyArray<{ payload?: { fullLabel?: string } }> | undefined) =>
+    payload?.[0]?.payload?.fullLabel ?? '';
 
   return (
     <section className="rounded border border-line bg-panel p-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-white">Price Chart</h2>
-          <p className="mt-1 text-sm text-gray-500">{symbol} close price and volume</p>
+          <p className="mt-1 text-sm text-gray-500">{symbol} close price &amp; volume · {TF_DESC[timeframe]} candles</p>
+          {rangeLabel ? (
+            <p className="mt-0.5 font-mono text-xs text-gray-500">{rangeLabel} · {klines.length} points</p>
+          ) : null}
         </div>
-        <div className="flex flex-wrap gap-2">
-          {timeframes.map((item) => (
-            <button key={item} type="button" onClick={() => onTimeframeChange(item)}
-              className={`rounded border px-3 py-2 text-sm font-medium transition ${timeframe === item ? 'border-coral/60 bg-coral/15 text-coral' : 'border-line bg-black/20 text-gray-400 hover:text-gray-200'}`}>
-              {item}
-            </button>
-          ))}
+        <div className="lg:text-right">
+          <p className="mb-1 font-mono text-[10px] uppercase tracking-wider text-gray-500">Candle interval</p>
+          <div className="flex flex-wrap gap-2">
+            {timeframes.map((item) => (
+              <button key={item} type="button" onClick={() => onTimeframeChange(item)}
+                className={`rounded border px-3 py-2 text-sm font-medium transition ${timeframe === item ? 'border-coral/60 bg-coral/15 text-coral' : 'border-line bg-black/20 text-gray-400 hover:text-gray-200'}`}>
+                {item}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -203,9 +244,9 @@ function PriceChart({ symbol, klines, timeframe, onTimeframeChange, isLoading }:
                 </linearGradient>
               </defs>
               <CartesianGrid stroke="#263244" strokeDasharray="3 3" />
-              <XAxis dataKey="label" stroke="#94a3b8" tick={{ fontSize: 12 }} />
-              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} />
-              <Tooltip contentStyle={{ background: '#111827', border: '1px solid #263244', borderRadius: 6 }} labelStyle={{ color: '#e5e7eb' }} formatter={(value) => [pkr(Number(value)), 'Close']} />
+              <XAxis dataKey="label" stroke="#94a3b8" tick={{ fontSize: 12 }} minTickGap={56} interval="preserveStartEnd" />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} domain={['auto', 'auto']} width={56} />
+              <Tooltip contentStyle={{ background: '#111827', border: '1px solid #263244', borderRadius: 6 }} labelStyle={{ color: '#e5e7eb' }} labelFormatter={tooltipLabel} formatter={(value) => [pkr(Number(value)), 'Close']} />
               <Area type="monotone" dataKey="close" stroke="#22d3ee" strokeWidth={2} fill="url(#priceGradient)" />
             </AreaChart>
           </ResponsiveContainer>
@@ -221,9 +262,9 @@ function PriceChart({ symbol, klines, timeframe, onTimeframeChange, isLoading }:
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} margin={{ left: 8, right: 16, top: 0, bottom: 0 }}>
               <CartesianGrid stroke="#263244" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="label" stroke="#94a3b8" tick={{ fontSize: 12 }} />
-              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} tickFormatter={(value) => compactNumber(Number(value))} />
-              <Tooltip contentStyle={{ background: '#111827', border: '1px solid #263244', borderRadius: 6 }} labelStyle={{ color: '#e5e7eb' }} formatter={(value) => [compactNumber(Number(value)), 'Volume']} />
+              <XAxis dataKey="label" stroke="#94a3b8" tick={{ fontSize: 12 }} minTickGap={56} interval="preserveStartEnd" />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={56} tickFormatter={(value) => compactNumber(Number(value))} />
+              <Tooltip contentStyle={{ background: '#111827', border: '1px solid #263244', borderRadius: 6 }} labelStyle={{ color: '#e5e7eb' }} labelFormatter={tooltipLabel} formatter={(value) => [compactNumber(Number(value)), 'Volume']} />
               <Bar dataKey="volume" fill="#2dd4bf" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
