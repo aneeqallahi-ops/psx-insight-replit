@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { PSXApi } from '../lib/psx-api';
+import { psxWs } from '../lib/psx-ws';
 import { describeMarketStatus, describeMarketStatusFromSchedule } from '../lib/market-status';
 import type { MarketStats, SectorData } from '../lib/types';
 
@@ -278,6 +279,13 @@ router.get('/market/ticks', async (req, res) => {
   } catch (error) {
     res.json({ ticks: [], updatedAt: Date.now(), warning: error instanceof Error ? error.message : 'Ticks unavailable' });
   }
+});
+
+// Diagnostics for the realtime PSX WebSocket connection (does it connect, what
+// has it received). Useful to verify the live-data pipeline without waiting for
+// market hours.
+router.get('/market/ws-status', (_req, res) => {
+  res.json({ ...psxWs.status(), updatedAt: Date.now() });
 });
 
 export default router;

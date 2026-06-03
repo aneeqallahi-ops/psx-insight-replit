@@ -4,6 +4,7 @@ import { ensureNewsScheduler } from "./lib/news-scraper";
 import { ensureDailyReportScheduler } from "./lib/agent/scheduler";
 import { ensureNotificationsScheduler } from "./lib/notifications/scheduler";
 import { seedCgtRates } from "./lib/cgt";
+import { ensurePsxWs } from "./lib/psx-ws";
 
 const rawPort = process.env["PORT"];
 
@@ -26,6 +27,7 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+  ensurePsxWs();
   ensureNewsScheduler();
   ensureDailyReportScheduler();
   ensureNotificationsScheduler();

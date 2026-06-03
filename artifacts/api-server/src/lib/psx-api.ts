@@ -1,6 +1,5 @@
 import type {
   AnnouncementsResponse,
-  BreadthStats,
   CompanyInfo,
   Dividend,
   Fundamentals,
@@ -10,6 +9,7 @@ import type {
   Tick,
 } from './types';
 import { withCache, TTL } from './cache';
+import { psxWs } from './psx-ws';
 
 const BASE_URL = process.env.PSX_BASE_URL || 'https://psxterminal.com';
 
@@ -69,10 +69,19 @@ export const PSXApi = {
   getTick: (type: string, symbol: string) =>
     fetchPSX<Tick>(`/api/ticks/${type}/${symbol}`),
 
-  getStats: (type: string) =>
-    withCache(`stats:${type}`, TTL.STATS, () =>
-      fetchPSX<MarketStats | BreadthStats | Record<string, SectorData>>(`/api/stats/${type}`),
-    ),
+  // Market/sector stats now come from the realtime WebSocket snapshot
+  // (psxterminal.com removed the REST /api/stats/{type} endpoint). Returns the
+  // latest in-memory snapshot; throws when unavailable (market closed or sync
+  // pending) so callers degrade instead of serving stale REST errors.
+  getStats: async (type: string): Promise<MarketStats | Record<string, SectorData>> => {
+    const data = type === 'sectors' ? psxWs.getSectorStats() : psxWs.getMarketStats(type);
+    if (!data) {
+      throw new Error(
+        `Live market data unavailable for "${type}" (market closed or realtime sync pending)`,
+      );
+    }
+    return data;
+  },
 
   getFundamentals: (symbol: string) =>
     withCache(`fundamentals:${symbol}`, TTL.FUNDAMENTALS, () =>
