@@ -96,6 +96,39 @@ export function getMarketRows(): Promise<MarketRow[]> {
   return withCache('portal:market-watch', MARKET_WATCH_TTL_MS, fetchRows);
 }
 
+const SECTOR_NAMES_TTL_MS = 12 * 60 * 60 * 1000; // the sector list is effectively static
+
+// The Market Watch table only carries numeric sector CODES (e.g. "0807"). The
+// /sector-summary/sectorwise endpoint maps those codes to names
+// (e.g. "0807" -> "COMMERCIAL BANKS"), so we can show names instead of codes.
+async function fetchSectorNames(): Promise<Record<string, string>> {
+  const res = await fetch(`${DPS_BASE_URL}/sector-summary/sectorwise`, {
+    headers: {
+      Accept: 'text/html',
+      'User-Agent': 'PSX-Insight/1.0',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`PSX sectorwise error: ${res.status}`);
+
+  const $ = cheerio.load(await res.text());
+  const map: Record<string, string> = {};
+  $('tr').each((_, row) => {
+    const cells = $(row).find('td');
+    if (cells.length < 2) return;
+    const code = cells.eq(0).text().trim();
+    const name = cells.eq(1).text().trim();
+    if (/^\d{3,4}$/.test(code) && name) map[code] = name;
+  });
+  return map;
+}
+
+/** Cached sector code -> name map (e.g. "0807" -> "COMMERCIAL BANKS"). */
+export function getSectorNames(): Promise<Record<string, string>> {
+  return withCache('portal:sector-names', SECTOR_NAMES_TTL_MS, fetchSectorNames);
+}
+
 function toTopMover(r: MarketRow): TopMover {
   return {
     symbol: r.symbol,
@@ -151,13 +184,21 @@ export const psxPortal = {
     return rows.filter((r) => r.listedIn.includes('KSE100')).map((r) => r.symbol);
   },
 
-  /** Sector aggregates keyed by sector code (replaces old /api/stats/sectors). */
+  /**
+   * Sector aggregates keyed by sector NAME (e.g. "COMMERCIAL BANKS"), falling
+   * back to the raw code if the name lookup is unavailable. Replaces the old
+   * /api/stats/sectors.
+   */
   async getSectorStats(): Promise<Record<string, SectorData>> {
-    const rows = await getMarketRows();
+    const [rows, names] = await Promise.all([
+      getMarketRows(),
+      getSectorNames().catch(() => ({} as Record<string, string>)),
+    ]);
     const out: Record<string, SectorData> = {};
 
     for (const r of rows) {
-      const key = r.sector || 'UNKNOWN';
+      const code = r.sector || 'UNKNOWN';
+      const key = names[code] || code;
       const s = (out[key] ??= {
         totalVolume: 0,
         totalValue: 0,
