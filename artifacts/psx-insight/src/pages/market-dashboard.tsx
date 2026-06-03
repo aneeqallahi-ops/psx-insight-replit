@@ -83,9 +83,9 @@ async function fetchMarkets(): Promise<MarketsResponse> {
   if (!res.ok) { const p = await res.json().catch(() => null); throw new Error(p?.error || 'Unable to load rows'); }
   return res.json();
 }
-async function fetchKseIndex(): Promise<IndexResponse> {
-  const res = await fetch('/api/market/index?code=KSE100', { cache: 'no-store' });
-  if (!res.ok) { const p = await res.json().catch(() => null); throw new Error(p?.error || 'Unable to load KSE-100'); }
+async function fetchIndex(code: string): Promise<IndexResponse> {
+  const res = await fetch(`/api/market/index?code=${code}`, { cache: 'no-store' });
+  if (!res.ok) { const p = await res.json().catch(() => null); throw new Error(p?.error || 'Unable to load index'); }
   return res.json();
 }
 async function fetchMovers(range: MoversRange, scope: MarketScope): Promise<MoversResponse> {
@@ -136,10 +136,12 @@ function MoverRow({ mover, tone }: { mover: TopMover; tone: 'up' | 'down' }) {
   );
 }
 
-function HeroBlock({ asOfLabel, isMarketOpen }: { asOfLabel: string; isMarketOpen: boolean }) {
+function HeroBlock({ asOfLabel, isMarketOpen, scope }: { asOfLabel: string; isMarketOpen: boolean; scope: MarketScope }) {
+  const indexCode = scope === 'kse100' ? 'KSE100' : 'ALLSHR';
+  const indexLabel = scope === 'kse100' ? 'KSE-100 INDEX' : 'KSE ALL SHARE INDEX';
   const { data, isLoading, error } = useQuery({
-    queryKey: ['kse-index'],
-    queryFn: fetchKseIndex,
+    queryKey: ['index', indexCode],
+    queryFn: () => fetchIndex(indexCode),
     refetchInterval: 60_000,
   });
   const positive = (data?.change ?? 0) >= 0;
@@ -147,7 +149,7 @@ function HeroBlock({ asOfLabel, isMarketOpen }: { asOfLabel: string; isMarketOpe
     <section className="border border-coral/40 bg-gradient-to-br from-coral/10 via-panel to-panel p-6 lg:p-8 clip-notch">
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex-1">
-          <p className="font-mono text-[10px] tracking-widest text-coral">// KSE-100 INDEX · {isMarketOpen ? 'LIVE' : 'CLOSE'}</p>
+          <p className="font-mono text-[10px] tracking-widest text-coral">// {indexLabel} · {isMarketOpen ? 'LIVE' : 'CLOSE'}</p>
           <div className="mt-3 flex flex-wrap items-baseline gap-4">
             <p className="font-display text-6xl tracking-tight text-white lg:text-8xl">
               {data ? data.close.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : isLoading ? '—' : '—'}
@@ -469,7 +471,7 @@ export function MarketDashboard() {
           </div>
         </header>
 
-        <HeroBlock asOfLabel={asOfLabel} isMarketOpen={isMarketOpen} />
+        <HeroBlock asOfLabel={asOfLabel} isMarketOpen={isMarketOpen} scope={scope} />
 
         {error ? (
           <div className="border border-rose-400/30 bg-rose-400/10 p-5 font-mono text-xs text-rose-100">
@@ -479,10 +481,9 @@ export function MarketDashboard() {
 
         <section>
           <SectionTag code="001" label="MARKET PULSE" />
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <StatTile label="Total Volume" value={stats ? compactNumber(stats.totalVolume) : isLoading ? '--' : '--'} detail={stats ? `${stats.symbolCount} active` : scopeLabel} />
+          <div className="grid gap-3 md:grid-cols-3">
+            <StatTile label="Total Volume" value={stats ? compactNumber(stats.totalVolume) : '--'} detail={stats ? `${stats.symbolCount} active` : scopeLabel} />
             <StatTile label="Total Value" value={stats ? money(stats.totalValue) : '--'} detail="Traded value" />
-            <StatTile label="Total Trades" value={stats ? compactNumber(stats.totalTrades) : '--'} detail={stats ? `${data?.symbolsCount ?? stats.symbolCount} symbols` : 'Order flow'} />
             <StatTile label="Breadth" value={stats ? `${stats.gainers}/${stats.losers}` : '--'} detail={stats ? `${stats.unchanged} unchanged` : 'Adv/Dec'} accent="text-coral" />
           </div>
         </section>

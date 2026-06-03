@@ -75,11 +75,14 @@ export const PSXApi = {
   // also keeps serving the last session while the market is closed. The realtime
   // WebSocket snapshot is preferred when available (live, sub-5-min) and the
   // portal is the always-on fallback.
-  getStats: async (type: string): Promise<MarketStats | Record<string, SectorData>> => {
+  getStats: async (
+    type: string,
+    scope: 'all' | 'kse100' = 'all',
+  ): Promise<MarketStats | Record<string, SectorData>> => {
     if (type === 'sectors') {
       return psxWs.getSectorStats() ?? (await psxPortal.getSectorStats());
     }
-    return psxWs.getMarketStats(type) ?? (await psxPortal.getMarketStats());
+    return psxWs.getMarketStats(type) ?? (await psxPortal.getMarketStats(scope));
   },
 
   /** Exact KSE-100 membership (from the Data Portal "LISTED IN" column). */

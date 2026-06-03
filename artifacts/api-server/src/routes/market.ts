@@ -72,10 +72,9 @@ router.get('/market/overview', async (req, res) => {
   const scope = req.query.scope === 'kse100' ? 'kse100' : 'all';
 
   try {
-    const [stats, symbols, sectors, statusResult] = await Promise.all([
-      PSXApi.getStats('REG'),
-      PSXApi.getSymbols(),
-      PSXApi.getStats('sectors').catch(() => null),
+    const [stats, symbols, statusResult] = await Promise.all([
+      PSXApi.getStats('REG', scope),
+      PSXApi.getSymbols().catch(() => [] as string[]),
       PSXApi.getStatus().catch(() => null),
     ]);
 
@@ -84,44 +83,17 @@ router.get('/market/overview', async (req, res) => {
       return;
     }
 
-    // KSE-100 membership is derived from the /api/stats/sectors endpoint
-    // (symbols listed under each sector). This is an approximation — the PSX
-    // direct constituent list at dps.psx.com.pk is blocked in this environment.
-    let kse100Symbols: string[] = [];
-    if (isSectorMap(sectors)) {
-      for (const [, data] of Object.entries(sectors)) {
-        kse100Symbols = kse100Symbols.concat(data.symbols);
-      }
-    }
-
-    const scopedSymbols = scope === 'kse100' && kse100Symbols.length > 0
-      ? kse100Symbols
-      : symbols;
-
-    const symbolsCount = scopedSymbols.length;
-
-    let scopedStats = stats;
-    if (scope === 'kse100' && kse100Symbols.length > 0) {
-      const set = new Set(kse100Symbols);
-      const fGainers = stats.topGainers.filter((m) => set.has(m.symbol));
-      const fLosers = stats.topLosers.filter((m) => set.has(m.symbol));
-      const totalVolume = fGainers.concat(fLosers).reduce((s, m) => s + (m.volume || 0), 0) || stats.totalVolume;
-      const totalValue = fGainers.concat(fLosers).reduce((s, m) => s + (m.value || 0), 0) || stats.totalValue;
-      scopedStats = {
-        ...stats,
-        topGainers: fGainers,
-        topLosers: fLosers,
-        gainers: fGainers.length,
-        losers: fLosers.length,
-        unchanged: Math.max(0, kse100Symbols.length - fGainers.length - fLosers.length),
-        symbolCount: kse100Symbols.length,
-        totalVolume,
-        totalValue,
-      };
-    }
-
+    // `stats` is already aggregated for the requested scope (all market or the
+    // exact KSE-100 constituents), so every count/total reflects the filter.
     const asOfTimestamp = statusResult?.timestamp ?? null;
-    res.json({ stats: scopedStats, symbolsCount, scope, symbols: symbols.length, asOfTimestamp, updatedAt: Date.now() });
+    res.json({
+      stats,
+      symbolsCount: stats.symbolCount,
+      scope,
+      symbols: symbols.length,
+      asOfTimestamp,
+      updatedAt: Date.now(),
+    });
   } catch (error) {
     res.status(502).json({ error: error instanceof Error ? error.message : 'Unable to load market overview' });
   }
@@ -162,36 +134,20 @@ router.get('/market/movers', async (req, res) => {
   const scope = req.query.scope === 'kse100' ? 'kse100' : 'all';
 
   try {
-    const [stats, sectors] = await Promise.all([
-      PSXApi.getStats('REG'),
-      scope === 'kse100' ? PSXApi.getStats('sectors').catch(() => null) : Promise.resolve(null),
-    ]);
+    const stats = await PSXApi.getStats('REG', scope);
     if (!isMarketStats(stats)) {
       res.status(502).json({ error: 'Unexpected market stats response' });
       return;
     }
 
-    let kse100Set: Set<string> | null = null;
-    if (scope === 'kse100' && isSectorMap(sectors)) {
-      const list: string[] = [];
-      for (const [, data] of Object.entries(sectors)) list.push(...data.symbols);
-      kse100Set = new Set(list);
-    }
-    const inScope = (sym: string) => (kse100Set ? kse100Set.has(sym) : true);
-
     if (range === '1d') {
-      res.json({
-        range,
-        scope,
-        gainers: stats.topGainers.filter((m) => inScope(m.symbol)),
-        losers: stats.topLosers.filter((m) => inScope(m.symbol)),
-        updatedAt: Date.now(),
-      });
+      // `stats` is already scoped, so its top movers are the scoped movers.
+      res.json({ range, scope, gainers: stats.topGainers, losers: stats.topLosers, updatedAt: Date.now() });
       return;
     }
 
     const lookback = range === '1w' ? 6 : 23;
-    const pool = Array.from(new Set([...stats.topGainers, ...stats.topLosers].map((m) => m.symbol).filter(inScope)));
+    const pool = Array.from(new Set([...stats.topGainers, ...stats.topLosers].map((m) => m.symbol)));
     const enriched = await Promise.all(
       pool.map(async (symbol) => {
         try {

@@ -173,9 +173,11 @@ function aggregate(rows: MarketRow[]): MarketStats {
 }
 
 export const psxPortal = {
-  /** MarketStats for the whole regular market (scope handled by callers). */
-  async getMarketStats(): Promise<MarketStats> {
-    return aggregate(await getMarketRows());
+  /** MarketStats for the given scope: the whole market, or KSE-100 constituents. */
+  async getMarketStats(scope: 'all' | 'kse100' = 'all'): Promise<MarketStats> {
+    const all = await getMarketRows();
+    const rows = scope === 'kse100' ? all.filter((r) => r.listedIn.includes('KSE100')) : all;
+    return aggregate(rows);
   },
 
   /** Exact KSE-100 membership from the "LISTED IN" column. */
