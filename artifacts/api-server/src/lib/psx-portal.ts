@@ -38,18 +38,8 @@ function numberFromCell($cell: cheerio.Cheerio<Element>): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-async function fetchRows(): Promise<MarketRow[]> {
-  const res = await fetch(`${DPS_BASE_URL}/market-watch`, {
-    headers: {
-      Accept: 'text/html',
-      'User-Agent': 'PSX-Insight/1.0',
-      'X-Requested-With': 'XMLHttpRequest',
-    },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!res.ok) throw new Error(`PSX market-watch error: ${res.status}`);
-
-  const $ = cheerio.load(await res.text());
+function parseRows(html: string): MarketRow[] {
+  const $ = cheerio.load(html);
   const rows: MarketRow[] = [];
 
   $('.tbl__body tr').each((_, row) => {
@@ -59,26 +49,46 @@ async function fetchRows(): Promise<MarketRow[]> {
     const symbol = (cells.eq(0).attr('data-order') || cells.eq(0).text()).trim();
     if (!symbol) return;
 
-    const ldcp = numberFromCell(cells.eq(3));
-    const price = numberFromCell(cells.eq(7));
-    const volume = numberFromCell(cells.eq(10));
-    const change = price - ldcp;
-    const changePercent = ldcp ? change / ldcp : 0;
-
+    // Read CHANGE (col 8) and CHANGE% (col 9) directly from the table: their
+    // `data-order` values are already signed (e.g. -3.43, -4.631). We must NOT
+    // compute change from current-ldcp, because while the market is closed the
+    // CURRENT column equals LDCP, which would yield a bogus 0 for every row.
     rows.push({
       symbol,
       sector: cells.eq(1).text().trim(),
       listedIn: cells.eq(2).text().split(',').map((s) => s.trim()).filter(Boolean),
-      ldcp,
-      price,
-      change,
-      changePercent,
-      volume,
-      value: price * volume,
+      ldcp: numberFromCell(cells.eq(3)),
+      price: numberFromCell(cells.eq(7)),
+      change: numberFromCell(cells.eq(8)),
+      changePercent: numberFromCell(cells.eq(9)) / 100, // percent -> fraction
+      volume: numberFromCell(cells.eq(10)),
+      value: numberFromCell(cells.eq(7)) * numberFromCell(cells.eq(10)),
     });
   });
 
   return rows;
+}
+
+async function fetchRows(): Promise<MarketRow[]> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`${DPS_BASE_URL}/market-watch`, {
+        headers: {
+          Accept: 'text/html',
+          'User-Agent': 'PSX-Insight/1.0',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) throw new Error(`PSX market-watch error: ${res.status}`);
+      return parseRows(await res.text());
+    } catch (err) {
+      lastError = err;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 /** Cached parsed Market Watch rows (full market snapshot). */
