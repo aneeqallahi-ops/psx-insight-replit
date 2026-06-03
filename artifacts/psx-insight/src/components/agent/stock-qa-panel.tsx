@@ -47,6 +47,18 @@ const SUGGESTIONS = [
   'How long did it trade near its highest price?',
 ];
 
+// Render the model's lightweight Markdown bold (**text**) as real <strong>,
+// so emphasis on numbers shows as bold instead of literal asterisks. Any
+// unmatched markers are left as-is (harmless during streaming).
+function renderRich(text: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) => {
+    const m = /^\*\*([^*]+)\*\*$/.exec(part);
+    return m
+      ? <strong key={i} className="font-semibold text-white">{m[1]}</strong>
+      : <span key={i}>{part}</span>;
+  });
+}
+
 function formatAsOf(iso?: string): string {
   if (!iso) return '';
   const d = new Date(iso);
@@ -160,7 +172,7 @@ export function StockQaPanel({ symbol }: { symbol: string }) {
                 <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> Analyst
               </p>
               <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-200">
-                {pending.text || (running ? 'Thinking…' : '')}
+                {pending.text ? renderRich(pending.text) : (running ? 'Thinking…' : '')}
               </p>
             </div>
           ) : null}
@@ -230,7 +242,7 @@ function ChatBubble({ message }: { message: ChatMessage }) {
       <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-coral">
         <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> Analyst
       </p>
-      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-200">{message.text}</p>
+      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-200">{renderRich(message.text)}</p>
       {message.asOf ? (
         <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-gray-500">
           As of {formatAsOf(message.asOf)} PKT{message.isStale ? ' · prior session' : ''}
