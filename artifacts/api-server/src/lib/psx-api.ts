@@ -10,6 +10,7 @@ import type {
 } from './types';
 import { withCache, TTL } from './cache';
 import { psxWs } from './psx-ws';
+import { psxPortal } from './psx-portal';
 
 const BASE_URL = process.env.PSX_BASE_URL || 'https://psxterminal.com';
 
@@ -69,19 +70,20 @@ export const PSXApi = {
   getTick: (type: string, symbol: string) =>
     fetchPSX<Tick>(`/api/ticks/${type}/${symbol}`),
 
-  // Market/sector stats now come from the realtime WebSocket snapshot
-  // (psxterminal.com removed the REST /api/stats/{type} endpoint). Returns the
-  // latest in-memory snapshot; throws when unavailable (market closed or sync
-  // pending) so callers degrade instead of serving stale REST errors.
+  // Market/sector stats: psxterminal.com removed its REST /api/stats endpoint,
+  // so we source these from the official PSX Data Portal (dps.psx.com.pk), which
+  // also keeps serving the last session while the market is closed. The realtime
+  // WebSocket snapshot is preferred when available (live, sub-5-min) and the
+  // portal is the always-on fallback.
   getStats: async (type: string): Promise<MarketStats | Record<string, SectorData>> => {
-    const data = type === 'sectors' ? psxWs.getSectorStats() : psxWs.getMarketStats(type);
-    if (!data) {
-      throw new Error(
-        `Live market data unavailable for "${type}" (market closed or realtime sync pending)`,
-      );
+    if (type === 'sectors') {
+      return psxWs.getSectorStats() ?? (await psxPortal.getSectorStats());
     }
-    return data;
+    return psxWs.getMarketStats(type) ?? (await psxPortal.getMarketStats());
   },
+
+  /** Exact KSE-100 membership (from the Data Portal "LISTED IN" column). */
+  getKse100Symbols: () => psxPortal.getKse100Symbols(),
 
   getFundamentals: (symbol: string) =>
     withCache(`fundamentals:${symbol}`, TTL.FUNDAMENTALS, () =>
