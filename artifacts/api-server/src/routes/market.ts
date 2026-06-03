@@ -288,4 +288,34 @@ router.get('/market/ws-status', (_req, res) => {
   res.json({ ...psxWs.status(), updatedAt: Date.now() });
 });
 
+// Diagnostics: can this server actually reach the PSX Data Portal? Surfaces the
+// underlying network error cause (ECONNREFUSED/ETIMEDOUT/TLS/etc.) so we can
+// tell a hard egress block from a fixable issue.
+router.get('/market/portal-debug', async (_req, res) => {
+  const targets = [
+    'https://dps.psx.com.pk/market-watch',
+    'https://psxterminal.com/api/status',
+  ];
+  const results = [];
+  for (const url of targets) {
+    const started = Date.now();
+    try {
+      const r = await fetch(url, {
+        headers: { Accept: 'text/html', 'User-Agent': 'PSX-Insight/1.0', 'X-Requested-With': 'XMLHttpRequest' },
+        signal: AbortSignal.timeout(15_000),
+      });
+      const text = await r.text();
+      results.push({ url, ok: true, status: r.status, bytes: text.length, ms: Date.now() - started });
+    } catch (err) {
+      const e = err as { name?: string; message?: string; cause?: { name?: string; code?: string; message?: string } };
+      results.push({
+        url, ok: false, ms: Date.now() - started,
+        name: e?.name, message: e?.message,
+        cause: e?.cause ? { name: e.cause.name, code: e.cause.code, message: e.cause.message } : null,
+      });
+    }
+  }
+  res.json({ results, updatedAt: Date.now() });
+});
+
 export default router;
