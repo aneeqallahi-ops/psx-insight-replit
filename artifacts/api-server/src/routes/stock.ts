@@ -219,7 +219,13 @@ router.post('/stock/ask/:symbol', async (req, res) => {
 
   sseSetup(res);
   const abortController = new AbortController();
-  req.on('close', () => abortController.abort());
+  // Abort only on a genuine client disconnect. We listen on `res` (response
+  // stream) rather than `req`, because for a POST that carries a body `req`'s
+  // 'close' fires as soon as the body is consumed — which would abort the LLM
+  // call before it even starts.
+  res.on('close', () => {
+    if (!res.writableEnded) abortController.abort();
+  });
 
   try {
     const result = await answerIntradayQuestion(symbol, question, {
