@@ -1,10 +1,15 @@
 import { Router } from 'express';
 import { PSXApi } from '../lib/psx-api';
 import { describeMarketStatusFromSchedule } from '../lib/market-status';
+import { answerIntradayQuestion } from '../lib/agent/intraday-qa';
+import { checkIpLimit } from '../lib/ip-rate-limit';
+import { sseSetup, sseSend } from '../lib/sse';
 import type { Fundamentals, MarketState, MarketStats, Timeframe } from '../lib/types';
 
 const router = Router();
 const timeframes = new Set<Timeframe>(['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M']);
+// Intraday timeframes offered to the public Q&A endpoint.
+const askTimeframes = new Set<Timeframe>(['1m', '5m', '15m']);
 
 function isMarketStats(data: unknown): data is MarketStats {
   return (
@@ -173,6 +178,63 @@ router.get('/stock/klines', async (req, res) => {
       .json({
         error: error instanceof Error ? error.message : `Unable to load ${symbol} chart`,
       });
+  }
+});
+
+// Public, single-shot intraday Q&A. A visitor asks a natural-language question
+// about this stock's intraday price/volume; we answer (streamed via SSE) using
+// deterministic stats + the LLM. See lib/agent/intraday-qa.ts.
+router.post('/stock/ask/:symbol', async (req, res) => {
+  const symbol = req.params.symbol?.toUpperCase();
+  if (!symbol || !/^[A-Z0-9-]{1,20}$/.test(symbol)) {
+    res.status(400).json({ error: 'Invalid symbol' });
+    return;
+  }
+
+  const body = (req.body ?? {}) as { question?: unknown; timeframe?: unknown };
+  const question = typeof body.question === 'string' ? body.question.trim() : '';
+  if (!question) {
+    res.status(400).json({ error: 'Missing question' });
+    return;
+  }
+  if (question.length > 500) {
+    res.status(400).json({ error: 'Question too long (max 500 characters)' });
+    return;
+  }
+  const requestedTf = typeof body.timeframe === 'string' ? body.timeframe : '5m';
+  const timeframe: Timeframe = askTimeframes.has(requestedTf as Timeframe)
+    ? (requestedTf as Timeframe)
+    : '5m';
+
+  // Per-IP guardrail (generous; the global limiter in lib/agent/llm.ts is the hard ceiling).
+  const ip = req.ip ?? 'unknown';
+  const limit = checkIpLimit(ip, [
+    { max: 20, windowMs: 60_000 },
+    { max: 200, windowMs: 60 * 60_000 },
+  ]);
+  if (!limit.ok) {
+    res.status(429).json({ error: `Too many questions. Try again in ${limit.retryAfterSec}s.` });
+    return;
+  }
+
+  sseSetup(res);
+  const abortController = new AbortController();
+  req.on('close', () => abortController.abort());
+
+  try {
+    const result = await answerIntradayQuestion(symbol, question, {
+      timeframe,
+      signal: abortController.signal,
+      onToken: (text) => sseSend(res, 'token', { text }),
+      onMeta: (meta) => sseSend(res, 'meta', meta),
+    });
+    sseSend(res, 'done', { ok: true, asOf: result.asOf, isStale: result.isStale });
+  } catch (err) {
+    if (!abortController.signal.aborted) {
+      sseSend(res, 'error', { error: err instanceof Error ? err.message : 'Failed to answer question' });
+    }
+  } finally {
+    if (!res.writableEnded) res.end();
   }
 });
 

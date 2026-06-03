@@ -27,6 +27,10 @@ function portfolioSession(req: Request, res: Response, next: NextFunction) {
 
 const app: Express = express();
 
+// Behind Railway's proxy, trust the first hop so req.ip is the real client IP
+// (used by the per-IP rate limiter on the public Q&A endpoint).
+app.set('trust proxy', 1);
+
 app.use(
   pinoHttp({
     logger,

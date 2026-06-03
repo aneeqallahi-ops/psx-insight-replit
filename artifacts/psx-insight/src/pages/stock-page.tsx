@@ -16,6 +16,7 @@ import {
 } from 'recharts';
 import { PortfolioStarButton } from '@/components/portfolio-star-button';
 import { StockAnalysisPanel } from '@/components/agent/stock-analysis-panel';
+import { StockQaPanel } from '@/components/agent/stock-qa-panel';
 import { CorporateCalendar } from '@/components/corporate-calendar';
 import { useMarketStatus } from '@/hooks/useMarketStatus';
 import type { CompanyInfo, Dividend, Fundamentals, Kline, Tick, Timeframe } from '@/lib/types';
@@ -481,6 +482,7 @@ export function StockPage() {
 
         <StockHeader symbol={symbol} tick={tick} updatedAt={updatedAt} isMarketOpen={isMarketOpen} marketStatusLabel={marketStatusLabel} />
         <StockAnalysisPanel symbol={symbol} />
+        <StockQaPanel symbol={symbol} />
         <PriceChart symbol={symbol} klines={klines} timeframe={timeframe} onTimeframeChange={setTimeframe} isLoading={klinesQuery.isFetching || detailQuery.isFetching} />
         <FundamentalsCard fundamentals={fundamentals} company={company} />
         <CorporateCalendar symbol={symbol} />
