@@ -1,24 +1,15 @@
 import { Router } from 'express';
-import { PSXApi } from '../lib/psx-api';
 import type { Announcement } from '../lib/types';
 import {
   classifyAnnouncement,
   sanitizeAnnouncementLink,
   type AnnouncementCategory,
 } from '../lib/announcement-classifier';
+import { fetchAllAnnouncements } from '../lib/psx-announcements';
 
 export type { AnnouncementCategory };
 
 const router = Router();
-
-function flatten(payload: { data: { d: Announcement }[] }) {
-  return (payload.data || []).map(({ d }) => ({
-    ...d,
-    pdf_id: sanitizeAnnouncementLink(d.pdf_id ?? null),
-    image_link: sanitizeAnnouncementLink(d.image_link ?? null),
-    category: classifyAnnouncement(d),
-  }));
-}
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function parseDateParam(v: unknown): string | undefined {
@@ -49,70 +40,56 @@ router.get('/announcements', async (req, res) => {
   const to = parseDateParam(req.query.to);
   const upcoming = String(req.query.upcoming ?? '') === '1';
 
-  const hasFilter = Boolean(category) || Boolean(from) || Boolean(to) || upcoming;
-
   try {
-    if (hasFilter) {
-      const SWEEP_PAGES = symbol ? 1 : 5;
-      const PAGE_SIZE = 20;
-      const today = todayISO();
-      const allItems: ReturnType<typeof flatten> = [];
-      let lastPagination: Awaited<ReturnType<typeof PSXApi.getAnnouncements>>['pagination'] | undefined;
-      for (let p = 1; p <= SWEEP_PAGES; p++) {
-        const payload = await PSXApi.getAnnouncements({ symbol, page: p, limit: PAGE_SIZE });
-        lastPagination = payload.pagination;
-        const sliceItems = flatten(payload).filter((it) => {
-          if (category && it.category !== category) return false;
-          const d = dateOnly(it.date);
-          if (from && (!d || d < from)) return false;
-          if (to && (!d || d > to)) return false;
-          if (upcoming) {
-            const future = [it.ex_date, it.held_date, it.book_closure_date_from, it.entitlement_paid_date, it.period_end_date]
-              .map(dateOnly)
-              .some((x) => x != null && x >= today);
-            if (!future) return false;
-          }
-          return true;
-        });
-        allItems.push(...sliceItems);
-        if (!payload.pagination?.hasNext) break;
-      }
-      const start = (page - 1) * PAGE_SIZE;
-      const pageItems = allItems.slice(start, start + PAGE_SIZE);
-      const totalPages = Math.max(1, Math.ceil(allItems.length / PAGE_SIZE));
-      res.json({
-        symbol: symbol ?? null,
-        page,
-        limit: PAGE_SIZE,
-        pagination: {
-          total: allItems.length,
-          page,
-          limit: PAGE_SIZE,
-          totalPages,
-          hasNext: page < totalPages,
-          hasPrev: page > 1,
-          filtered: true,
-          sweptPages: SWEEP_PAGES,
-          upstreamTotal: lastPagination?.total ?? null,
-        },
-        items: pageItems,
-        updatedAt: Date.now(),
-      });
-      return;
-    }
+    const all = await fetchAllAnnouncements();
+    const today = todayISO();
 
-    const payload = await PSXApi.getAnnouncements({ symbol, page, limit });
+    // Enrich + filter in one pass.
+    const enriched = all
+      .map((r) => {
+        const record = { ...(r as Announcement) };
+        record.pdf_id = sanitizeAnnouncementLink(record.pdf_id ?? null);
+        record.image_link = sanitizeAnnouncementLink(record.image_link ?? null);
+        return { ...record, category: classifyAnnouncement(record) };
+      })
+      .filter((it) => {
+        if (symbol && it.symbol !== symbol) return false;
+        if (category && it.category !== category) return false;
+        const d = dateOnly(it.date);
+        if (from && (!d || d < from)) return false;
+        if (to && (!d || d > to)) return false;
+        if (upcoming) {
+          const future = [it.ex_date, it.held_date, it.book_closure_date_from, it.entitlement_paid_date, it.period_end_date]
+            .map(dateOnly)
+            .some((x) => x != null && x >= today);
+          if (!future) return false;
+        }
+        return true;
+      });
+
+    // Newest first (portal already sorts, but be explicit).
+    enriched.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    const total = enriched.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const items = enriched.slice((page - 1) * limit, page * limit);
+
     res.json({
       symbol: symbol ?? null,
       page,
       limit,
-      pagination: payload.pagination ?? null,
-      items: flatten(payload),
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+      },
+      items,
       updatedAt: Date.now(),
     });
   } catch (error) {
-    // Announcements upstream is flaky — return an empty result with a warning
-    // so the Events page renders instead of showing a hard error banner.
     res.json({
       symbol: symbol ?? null,
       page,
