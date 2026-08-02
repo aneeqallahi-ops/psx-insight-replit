@@ -34,10 +34,14 @@ class TtlCache {
   setPending<T>(key: string, promise: Promise<T>): void {
     this.pending.set(key, promise);
     // Always clear the pending entry after the promise settles so a later
-    // caller can trigger a fresh fetch (subject to TTL).
-    promise.finally(() => {
+    // caller can trigger a fresh fetch (subject to TTL). Handle both settle
+    // paths explicitly — a bare `.finally()` returns a new promise that
+    // re-throws on rejection, which becomes an unhandled rejection and
+    // crashes Node.js 24.
+    const clear = () => {
       if (this.pending.get(key) === promise) this.pending.delete(key);
-    });
+    };
+    promise.then(clear, clear);
   }
 
   delete(key: string): void {
