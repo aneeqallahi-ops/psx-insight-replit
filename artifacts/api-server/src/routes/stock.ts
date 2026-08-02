@@ -89,13 +89,6 @@ router.get('/stock/detail', async (req, res) => {
     const statsData =
       statsR.status === 'fulfilled' && isMarketStats(statsR.value) ? statsR.value : null;
 
-    if (!fund && !klineData.length) {
-      const reason =
-        fundamentalsR.status === 'rejected' ? fundamentalsR.reason : 'No data available';
-      res.status(502).json({ error: reason instanceof Error ? reason.message : String(reason) });
-      return;
-    }
-
     // Use today's kline high/low only if the latest candle is from today's session.
     const latestKline = klineData.length > 0 ? klineData[klineData.length - 1] : null;
     let klineHigh: number | null = null;
@@ -112,6 +105,18 @@ router.get('/stock/detail', async (req, res) => {
       ? buildSyntheticTick(symbol, fund, statsData, klineHigh, klineLow)
       : null;
 
+    // Surface upstream failures as a soft warning so the page still renders
+    // with whatever partial data we did get, instead of a hard 502.
+    const rejections = [
+      fundamentalsR.status === 'rejected' ? `fundamentals: ${String(fundamentalsR.reason)}` : null,
+      companyR.status === 'rejected' ? `company: ${String(companyR.reason)}` : null,
+      dividendsR.status === 'rejected' ? `dividends: ${String(dividendsR.reason)}` : null,
+      klinesR.status === 'rejected' ? `klines: ${String(klinesR.reason)}` : null,
+    ].filter(Boolean);
+    const warning = !fund && !klineData.length && rejections.length > 0
+      ? `Upstream data source is temporarily unavailable (${rejections.join('; ')})`
+      : undefined;
+
     res.json({
       tick: syntheticTick,
       fundamentals: fund,
@@ -120,6 +125,7 @@ router.get('/stock/detail', async (req, res) => {
       klines: klineData,
       timeframe,
       updatedAt: Date.now(),
+      ...(warning ? { warning } : {}),
     });
   } catch (error) {
     res
