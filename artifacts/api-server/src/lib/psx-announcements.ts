@@ -194,3 +194,32 @@ export function fetchAllAnnouncements(): Promise<ParsedRow[]> {
     fetchAnnouncementsPage({ type: 'E', count: 50, offset: 0 }),
   );
 }
+
+/**
+ * Symbol-specific announcements. PSX portal accepts a `symbol` filter on the
+ * same POST endpoint. Fetches multiple `type` codes (E = events, C = company,
+ * N = notices) and merges so we get financial results too.
+ */
+export function fetchAnnouncementsForSymbol(symbol: string): Promise<ParsedRow[]> {
+  const upper = symbol.toUpperCase();
+  return withCache(`psx-portal:announcements:sym:${upper}`, TTL.ANNOUNCEMENTS, async () => {
+    const results = await Promise.allSettled([
+      fetchAnnouncementsPage({ type: 'E', symbol: upper, count: 50, offset: 0 }),
+      fetchAnnouncementsPage({ type: 'C', symbol: upper, count: 50, offset: 0 }),
+      fetchAnnouncementsPage({ type: 'N', symbol: upper, count: 50, offset: 0 }),
+    ]);
+    const rows: ParsedRow[] = [];
+    for (const r of results) if (r.status === 'fulfilled') rows.push(...r.value);
+    // De-dupe by (date, title)
+    const seen = new Set<string>();
+    const deduped: ParsedRow[] = [];
+    for (const row of rows) {
+      const key = `${row.date}|${row.title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push({ ...row, symbol: upper });
+    }
+    deduped.sort((a, b) => b.date.localeCompare(a.date));
+    return deduped;
+  });
+}

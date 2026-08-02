@@ -447,15 +447,17 @@ function DividendsTable({ dividends }: { dividends: Dividend[] }) {
   return (
     <section className="rounded border border-line bg-panel p-6">
       <h2 className="text-lg font-semibold text-white">Dividend History</h2>
+      <p className="mt-1 text-xs text-gray-500">Payouts declared as a percentage of face value (Rs 10). Source: PSX Data Portal.</p>
       <div className="mt-5 overflow-x-auto">
         <table className="w-full min-w-[720px] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-line text-xs uppercase text-gray-500">
               <th className="py-3 pr-4 font-medium">Year</th>
-              <th className="px-4 py-3 font-medium">Amount (PKR)</th>
-              <th className="px-4 py-3 font-medium">Ex-Date</th>
-              <th className="px-4 py-3 font-medium">Record Date</th>
-              <th className="py-3 pl-4 font-medium">Payment Date</th>
+              <th className="px-4 py-3 font-medium">Rate</th>
+              <th className="px-4 py-3 font-medium">Per share (PKR)</th>
+              <th className="px-4 py-3 font-medium">Book closure start</th>
+              <th className="px-4 py-3 font-medium">Book closure end</th>
+              <th className="py-3 pl-4 font-medium">Announced</th>
             </tr>
           </thead>
           <tbody>
@@ -463,14 +465,15 @@ function DividendsTable({ dividends }: { dividends: Dividend[] }) {
               dividends.map((div, i) => (
                 <tr key={`${div.symbol}-${div.ex_date}-${i}`} className="border-b border-line/80">
                   <td className="py-3 pr-4 text-white">{div.year}</td>
-                  <td className="px-4 py-3 font-medium text-emerald-300">{div.amount.toFixed(2)}</td>
-                  <td className="px-4 py-3 text-gray-300">{div.ex_date}</td>
-                  <td className="px-4 py-3 text-gray-300">{div.record_date}</td>
-                  <td className="py-3 pl-4 text-gray-300">{div.payment_date}</td>
+                  <td className="px-4 py-3 font-medium text-emerald-300">{div.amount.toFixed(2)}%</td>
+                  <td className="px-4 py-3 text-gray-300">{(div.amount / 10).toFixed(2)}</td>
+                  <td className="px-4 py-3 text-gray-300">{div.ex_date || '--'}</td>
+                  <td className="px-4 py-3 text-gray-300">{div.record_date || '--'}</td>
+                  <td className="py-3 pl-4 text-gray-300">{div.payment_date || '--'}</td>
                 </tr>
               ))
             ) : (
-              <tr><td className="py-6 text-gray-500" colSpan={5}>No dividend history available.</td></tr>
+              <tr><td className="py-6 text-gray-500" colSpan={6}>No dividend history available.</td></tr>
             )}
           </tbody>
         </table>

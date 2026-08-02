@@ -5,7 +5,7 @@ import {
   sanitizeAnnouncementLink,
   type AnnouncementCategory,
 } from '../lib/announcement-classifier';
-import { fetchAllAnnouncements } from '../lib/psx-announcements';
+import { fetchAllAnnouncements, fetchAnnouncementsForSymbol } from '../lib/psx-announcements';
 
 export type { AnnouncementCategory };
 
@@ -41,7 +41,12 @@ router.get('/announcements', async (req, res) => {
   const upcoming = String(req.query.upcoming ?? '') === '1';
 
   try {
-    const all = await fetchAllAnnouncements();
+    // Symbol-specific announcements go through the symbol filter on the PSX
+    // portal (bigger and more complete than the client-side symbol filter
+    // over the general corporate-events snapshot).
+    const all = symbol
+      ? await fetchAnnouncementsForSymbol(symbol)
+      : await fetchAllAnnouncements();
     const today = todayISO();
 
     // Enrich + filter in one pass.
