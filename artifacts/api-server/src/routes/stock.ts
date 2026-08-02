@@ -5,7 +5,27 @@ import { answerIntradayQuestion } from '../lib/agent/intraday-qa';
 import { checkIpLimit } from '../lib/ip-rate-limit';
 import { sseSetup, sseSend } from '../lib/sse';
 import { getMarketRows, type MarketRow } from '../lib/psx-portal';
+import { getCompanyData, toFundamentals, toCompanyInfo, type PsxCompanyData } from '../lib/psx-company';
 import type { Fundamentals, MarketState, MarketStats, Timeframe, Tick } from '../lib/types';
+
+function tickFromCompanyData(data: PsxCompanyData): Tick | null {
+  if (data.price == null) return null;
+  const schedule = describeMarketStatusFromSchedule();
+  return {
+    symbol: data.symbol,
+    market: 'REG',
+    st: schedule.isOpen ? 'OPN' : 'CLS',
+    price: data.price,
+    change: data.change ?? 0,
+    changePercent: data.changePercent ?? 0,
+    volume: data.volume ?? 0,
+    trades: 0,
+    value: (data.price ?? 0) * (data.volume ?? 0),
+    ...(data.high != null ? { high: data.high } : {}),
+    ...(data.low != null ? { low: data.low } : {}),
+    timestamp: data.fetchedAt,
+  };
+}
 
 function tickFromMarketRow(row: MarketRow): Tick {
   const schedule = describeMarketStatusFromSchedule();
@@ -91,7 +111,10 @@ router.get('/stock/detail', async (req, res) => {
   }
 
   try {
-    const [fundamentalsR, companyR, dividendsR, klinesR, statsR] = await Promise.allSettled([
+    // Primary source: PSX portal company page (reliable, richer data).
+    // Secondary: psxterminal.com for dividends + klines/chart data.
+    const [portalR, fundamentalsR, companyR, dividendsR, klinesR, statsR] = await Promise.allSettled([
+      getCompanyData(symbol),
       PSXApi.getFundamentals(symbol),
       PSXApi.getCompany(symbol),
       PSXApi.getDividends(symbol),
@@ -99,8 +122,14 @@ router.get('/stock/detail', async (req, res) => {
       PSXApi.getStats('REG'),
     ]);
 
-    const fund = fundamentalsR.status === 'fulfilled' ? fundamentalsR.value : null;
-    const comp = companyR.status === 'fulfilled' ? companyR.value : null;
+    const portal = portalR.status === 'fulfilled' ? portalR.value : null;
+    // Prefer portal-derived fundamentals/company info; fall back to psxterminal.
+    const fund = portal
+      ? toFundamentals(portal)
+      : fundamentalsR.status === 'fulfilled' ? fundamentalsR.value : null;
+    const comp = portal
+      ? toCompanyInfo(portal)
+      : companyR.status === 'fulfilled' ? companyR.value : null;
     const divs = dividendsR.status === 'fulfilled' ? dividendsR.value : [];
     const klineData = klinesR.status === 'fulfilled' ? klinesR.value : [];
     const statsData =
@@ -118,15 +147,14 @@ router.get('/stock/detail', async (req, res) => {
       }
     }
 
-    let syntheticTick: Tick | null = fund
-      ? buildSyntheticTick(symbol, fund, statsData, klineHigh, klineLow)
-      : null;
-
-    // Fallback: if psxterminal fundamentals failed, look the symbol up in the
-    // PSX portal Market Watch snapshot we already scrape for the dashboard.
-    // That gives us real price / change / volume / value even when the primary
-    // upstream is unreachable.
-    let portalFallbackUsed = false;
+    // Prefer PSX portal per-symbol tick (has real open/high/low/volume for the
+    // symbol). Fall back to psxterminal synthetic tick, then to market-watch.
+    let syntheticTick: Tick | null = portal ? tickFromCompanyData(portal) : null;
+    let portalFallbackUsed = Boolean(syntheticTick);
+    if (!syntheticTick && fund) {
+      syntheticTick = buildSyntheticTick(symbol, fund, statsData, klineHigh, klineLow);
+      portalFallbackUsed = false;
+    }
     if (!syntheticTick) {
       try {
         const rows = await getMarketRows();
@@ -178,10 +206,20 @@ router.get('/stock/tick', async (req, res) => {
     return;
   }
   try {
-    const [fundamentalsR, statsR] = await Promise.allSettled([
+    // Primary: PSX portal per-symbol page. Secondary: psxterminal.
+    const [portalR, fundamentalsR, statsR] = await Promise.allSettled([
+      getCompanyData(symbol),
       PSXApi.getFundamentals(symbol),
       PSXApi.getStats('REG'),
     ]);
+
+    if (portalR.status === 'fulfilled') {
+      const tick = tickFromCompanyData(portalR.value);
+      if (tick) {
+        res.json({ tick, updatedAt: Date.now() });
+        return;
+      }
+    }
 
     const statsData =
       statsR.status === 'fulfilled' && isMarketStats(statsR.value) ? statsR.value : null;
@@ -192,7 +230,7 @@ router.get('/stock/tick', async (req, res) => {
       return;
     }
 
-    // Fallback to PSX portal Market Watch snapshot.
+    // Last-resort: PSX Market Watch snapshot.
     try {
       const rows = await getMarketRows();
       const row = rows.find((r) => r.symbol === symbol);
@@ -208,9 +246,9 @@ router.get('/stock/tick', async (req, res) => {
       // fall through to error
     }
 
-    throw fundamentalsR.reason instanceof Error
+    throw fundamentalsR.status === 'rejected' && fundamentalsR.reason instanceof Error
       ? fundamentalsR.reason
-      : new Error(String(fundamentalsR.reason));
+      : new Error(`Unable to load ${symbol} tick`);
   } catch (error) {
     res
       .status(502)
