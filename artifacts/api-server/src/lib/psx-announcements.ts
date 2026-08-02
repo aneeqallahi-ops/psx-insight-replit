@@ -1,9 +1,10 @@
 // Corporate announcements sourced from PSX's official Data Portal
 // (dps.psx.com.pk/announcements).
 //
-// psxterminal.com's /api/announcements endpoint is unreliable — same approach
-// as psx-portal.ts: hit the primary source, parse the HTML table with cheerio,
-// map to the existing Announcement shape so the frontend needs no changes.
+// The portal renders the table via a POST to /announcements with form-encoded
+// filters (type, symbol, query, count, offset, date_from, date_to, page). We
+// mirror that browser request, parse the returned HTML with cheerio, and map
+// rows to the Announcement shape so no frontend changes are needed.
 
 import * as cheerio from 'cheerio';
 import type { Announcement } from './types';
@@ -12,21 +13,15 @@ import { withCache, TTL } from './cache';
 const DPS_BASE_URL = process.env.PSX_DPS_BASE_URL || 'https://dps.psx.com.pk';
 
 const REQUEST_HEADERS = {
-  Accept: 'text/html',
-  'User-Agent': 'PSX-Insight/1.0',
+  Accept: 'text/html,application/xhtml+xml,*/*;q=0.9',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+  Origin: DPS_BASE_URL,
+  Referer: `${DPS_BASE_URL}/announcements`,
+  'User-Agent': 'Mozilla/5.0 (compatible; PSX-Insight/1.0)',
   'X-Requested-With': 'XMLHttpRequest',
 };
 
-function parseNumberOrNull(raw: string | null | undefined): number | null {
-  if (!raw) return null;
-  const cleaned = raw.replace(/[,%\s]/g, '');
-  if (!cleaned) return null;
-  const value = Number(cleaned);
-  return Number.isFinite(value) ? value : null;
-}
-
-// Extract a dividend / bonus / right percent from a title like
-// "Cash Dividend @ 25%" or "Bonus Shares 10%".
 function extractPercentAfterKeyword(title: string, keyword: RegExp): number | null {
   const match = title.match(new RegExp(`${keyword.source}[^0-9%]{0,40}([0-9]+(?:\\.[0-9]+)?)\\s*%`, 'i'));
   if (!match) return null;
@@ -34,19 +29,29 @@ function extractPercentAfterKeyword(title: string, keyword: RegExp): number | nu
   return Number.isFinite(value) ? value : null;
 }
 
-// PSX portal renders the date column with a machine-sortable data-order attribute
-// (e.g. "20260215"). Prefer that; fall back to parsing the visible text.
+// Symbols on PSX are 2-8 uppercase letters/digits. Extract from a title like
+// "OGDC: Board Meeting Notice" or "Cash Dividend – HBL".
+function extractSymbolFromTitle(title: string): string | null {
+  const match =
+    title.match(/^([A-Z][A-Z0-9]{1,7})\s*[:\-–—]/) ||
+    title.match(/\(([A-Z][A-Z0-9]{1,7})\)/) ||
+    title.match(/\b([A-Z][A-Z0-9]{2,7})\b/);
+  return match ? match[1] : null;
+}
+
 function normaliseDate(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const trimmed = raw.trim();
+  if (!trimmed) return null;
   if (/^\d{8}$/.test(trimmed)) {
-    // YYYYMMDD → YYYY-MM-DD
     return `${trimmed.slice(0, 4)}-${trimmed.slice(4, 6)}-${trimmed.slice(6, 8)}`;
   }
   if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return trimmed.slice(0, 10);
-  // dd/MM/yyyy or dd-MM-yyyy
-  const m = trimmed.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})/);
-  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  const dmy = trimmed.match(/^(\d{1,2})[\/\-\s](\w{3,}|\d{1,2})[\/\-\s,]\s*(\d{4})/);
+  if (dmy) {
+    const parsed = new Date(`${dmy[2]} ${dmy[1]}, ${dmy[3]}`);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  }
   const parsed = new Date(trimmed);
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
   return null;
@@ -73,35 +78,57 @@ function parseAnnouncementRows(html: string): ParsedRow[] {
   const $ = cheerio.load(html);
   const rows: ParsedRow[] = [];
 
-  // The portal uses a data table under .announcementsTable or similar. Selector
-  // is defensive — any <tr> inside a <table> with enough cells will be tried.
-  $('table tr').each((_, row) => {
+  $('table tr').each((idx, row) => {
     const cells = $(row).find('td');
-    if (cells.length < 3) return; // header row or unrelated block
+    if (cells.length < 3) return;
 
-    const dateRaw = cells.eq(0).attr('data-order') || cells.eq(0).text();
-    const date = normaliseDate(dateRaw);
+    // Try each cell for a parseable date — the portal's column layout
+    // varies by announcement type, so we don't hardcode positions.
+    let date: string | null = null;
+    let dateIdx = -1;
+    for (let i = 0; i < Math.min(cells.length, 3); i++) {
+      const raw = cells.eq(i).attr('data-order') || cells.eq(i).text();
+      const parsed = normaliseDate(raw);
+      if (parsed) { date = parsed; dateIdx = i; break; }
+    }
     if (!date) return;
 
-    const symbol = (cells.eq(1).attr('data-order') || cells.eq(1).text() || '').trim().toUpperCase();
-    if (!symbol || symbol.length > 20) return;
+    // Symbol column (if present) usually appears immediately after date.
+    // For "PSX Notices" style rows there's no symbol column — we extract it
+    // from the title text as a fallback.
+    let symbol = '';
+    for (let i = dateIdx + 1; i < cells.length; i++) {
+      const raw = (cells.eq(i).attr('data-order') || cells.eq(i).text() || '').trim().toUpperCase();
+      if (/^[A-Z][A-Z0-9]{1,7}$/.test(raw)) { symbol = raw; break; }
+    }
 
-    const title = (cells.length >= 4 ? cells.eq(3).text() : cells.eq(2).text()).trim();
+    // Title cell = the widest text cell that isn't a date/time/symbol/PDF link.
+    let title = '';
+    let bestLen = 0;
+    cells.each((i, cell) => {
+      const text = $(cell).text().trim();
+      if (text.length > bestLen && !/^\d/.test(text) && !/^(pdf|download|view)$/i.test(text)) {
+        bestLen = text.length;
+        title = text;
+      }
+      return true;
+    });
     if (!title) return;
 
-    // Attachment link (PDF) — the portal typically renders it in the last cell
-    // as an <a href="…"> icon.
-    const pdfHref = $(row).find('a[href*="pdf" i], a[href*="download" i]').first().attr('href');
+    if (!symbol) {
+      symbol = extractSymbolFromTitle(title) ?? '';
+    }
+
+    const pdfHref = $(row).find('a[href*="pdf" i], a[href*="download" i], a[href$=".pdf" i]').first().attr('href');
     const pdfUrl = absoluteUrl(pdfHref);
 
-    // Extract common financial actions from the title text.
     const dividend = extractPercentAfterKeyword(title, /(cash\s+dividend|dividend|interim payout|final payout)/);
     const bonus = extractPercentAfterKeyword(title, /bonus/);
     const rightIssue = extractPercentAfterKeyword(title, /right/);
 
     rows.push({
-      id: 0, // upstream id is not exposed on the portal — filled in below
-      symbol,
+      id: idx + 1,
+      symbol: symbol || 'PSX',
       date,
       announcement_type: title,
       title,
@@ -115,21 +142,39 @@ function parseAnnouncementRows(html: string): ParsedRow[] {
     });
   });
 
-  // Assign stable synthetic ids based on ordering, so the frontend can key rows.
-  rows.forEach((r, idx) => { r.id = idx + 1; });
-
   return rows;
 }
 
-async function fetchAnnouncementsPage(): Promise<ParsedRow[]> {
+interface PsxAnnouncementQuery {
+  type?: string;
+  symbol?: string;
+  offset?: number;
+  count?: number;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+async function fetchAnnouncementsPage(q: PsxAnnouncementQuery): Promise<ParsedRow[]> {
+  const body = new URLSearchParams();
+  body.set('type', q.type ?? 'E');
+  body.set('symbol', q.symbol ?? '');
+  body.set('query', '');
+  body.set('count', String(q.count ?? 50));
+  body.set('offset', String(q.offset ?? 0));
+  body.set('date_from', q.dateFrom ?? '');
+  body.set('date_to', q.dateTo ?? '');
+  body.set('page', 'annc');
+
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const res = await fetch(`${DPS_BASE_URL}/announcements`, {
+        method: 'POST',
         headers: REQUEST_HEADERS,
+        body: body.toString(),
         signal: AbortSignal.timeout(20_000),
       });
-      if (!res.ok) throw new Error(`PSX announcements page error: ${res.status}`);
+      if (!res.ok) throw new Error(`PSX announcements POST error: ${res.status}`);
       return parseAnnouncementRows(await res.text());
     } catch (err) {
       lastError = err;
@@ -140,10 +185,12 @@ async function fetchAnnouncementsPage(): Promise<ParsedRow[]> {
 }
 
 /**
- * Cached list of all announcements currently shown on the PSX portal. The
- * portal exposes only a snapshot — no server-side pagination — so we cache
- * the whole list and slice client-side in the /announcements route.
+ * Cached list of the latest 50 announcements from the PSX portal. Uses the
+ * portal's default "type=E" (corporate events) — dividends, bonuses, board
+ * meetings, book closures, corporate briefings.
  */
 export function fetchAllAnnouncements(): Promise<ParsedRow[]> {
-  return withCache('psx-portal:announcements', TTL.ANNOUNCEMENTS, fetchAnnouncementsPage);
+  return withCache('psx-portal:announcements:E', TTL.ANNOUNCEMENTS, () =>
+    fetchAnnouncementsPage({ type: 'E', count: 50, offset: 0 }),
+  );
 }
