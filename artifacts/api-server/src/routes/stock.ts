@@ -6,6 +6,8 @@ import { checkIpLimit } from '../lib/ip-rate-limit';
 import { sseSetup, sseSend } from '../lib/sse';
 import { getMarketRows, type MarketRow } from '../lib/psx-portal';
 import { getCompanyData, toFundamentals, toCompanyInfo, type PsxCompanyData } from '../lib/psx-company';
+import { getPortalKlines } from '../lib/psx-timeseries';
+import { getPayouts } from '../lib/psx-payouts';
 import type { Fundamentals, MarketState, MarketStats, Timeframe, Tick } from '../lib/types';
 
 function tickFromCompanyData(data: PsxCompanyData): Tick | null {
@@ -111,10 +113,12 @@ router.get('/stock/detail', async (req, res) => {
   }
 
   try {
-    // Primary source: PSX portal company page (reliable, richer data).
-    // Secondary: psxterminal.com for dividends + klines/chart data.
-    const [portalR, fundamentalsR, companyR, dividendsR, klinesR, statsR] = await Promise.allSettled([
+    // Primary source: PSX portal — company page, timeseries, payouts.
+    // Secondary: psxterminal.com for anything the portal doesn't provide.
+    const [portalR, portalKlinesR, portalPayoutsR, fundamentalsR, companyR, dividendsR, klinesR, statsR] = await Promise.allSettled([
       getCompanyData(symbol),
+      getPortalKlines(symbol, timeframe, 100),
+      getPayouts(symbol),
       PSXApi.getFundamentals(symbol),
       PSXApi.getCompany(symbol),
       PSXApi.getDividends(symbol),
@@ -130,8 +134,17 @@ router.get('/stock/detail', async (req, res) => {
     const comp = portal
       ? toCompanyInfo(portal)
       : companyR.status === 'fulfilled' ? companyR.value : null;
-    const divs = dividendsR.status === 'fulfilled' ? dividendsR.value : [];
-    const klineData = klinesR.status === 'fulfilled' ? klinesR.value : [];
+
+    // Prefer PSX portal dividends (real payouts history). Fall back to psxterminal.
+    const portalDivs = portalPayoutsR.status === 'fulfilled' ? portalPayoutsR.value : [];
+    const psxTermDivs = dividendsR.status === 'fulfilled' ? dividendsR.value : [];
+    const divs = portalDivs.length > 0 ? portalDivs : psxTermDivs;
+
+    // Prefer PSX portal klines (real historical data). Fall back to psxterminal.
+    const portalKlines = portalKlinesR.status === 'fulfilled' ? portalKlinesR.value : [];
+    const psxTermKlines = klinesR.status === 'fulfilled' ? klinesR.value : [];
+    const klineData = portalKlines.length > 0 ? portalKlines : psxTermKlines;
+
     const statsData =
       statsR.status === 'fulfilled' && isMarketStats(statsR.value) ? statsR.value : null;
 
@@ -268,7 +281,14 @@ router.get('/stock/klines', async (req, res) => {
     return;
   }
   try {
-    const klines = await PSXApi.getKlines(symbol, timeframe, { limit: 100 });
+    // Portal first, psxterminal as fallback.
+    let klines: Awaited<ReturnType<typeof getPortalKlines>> = [];
+    try {
+      klines = await getPortalKlines(symbol, timeframe, 100);
+    } catch { /* try psxterminal */ }
+    if (klines.length === 0) {
+      klines = await PSXApi.getKlines(symbol, timeframe, { limit: 100 });
+    }
     res.json({ klines, timeframe, updatedAt: Date.now() });
   } catch (error) {
     res

@@ -61,15 +61,19 @@ function parseNumber(raw: string | null | undefined): number | null {
 // (label above value) as well as table rows (<th>label</th><td>value</td>).
 // Look for the label anywhere, then take the closest following text with a
 // number in it.
+function normaliseLabel(text: string): string {
+  return text.toUpperCase().replace(/\s+/g, ' ').replace(/[’‘'`]/g, "'").trim();
+}
+
 function extractByLabel($: cheerio.CheerioAPI, label: string): string | null {
-  const wanted = label.toUpperCase();
+  const wanted = normaliseLabel(label);
   let found: string | null = null;
 
   $('*').each((_, el) => {
     if (found) return false;
     const $el = $(el);
     // Own text without descendants.
-    const own = $el.clone().children().remove().end().text().trim().toUpperCase();
+    const own = normaliseLabel($el.clone().children().remove().end().text());
     if (own !== wanted) return true;
 
     // Strategy 1: immediate next sibling with a value.
@@ -172,20 +176,34 @@ function parseCompanyHtml(symbol: string, html: string): PsxCompanyData {
   const sharesOutstanding = parseNumber(extractByLabel($, 'Shares'));
 
   // "Free Float" appears twice on the page — once as a share count, once as %.
-  // Extract both values by scanning all cells that follow a "FREE FLOAT" label.
-  const freeFloatCandidates: number[] = [];
+  // Values that are plausibly a percent (≤100 and contain no comma) → %.
+  // Values with commas (thousands separator) or >100 → share count.
+  const freeFloatCandidates: string[] = [];
   $('*').each((_, el) => {
-    const own = $(el).clone().children().remove().end().text().trim().toUpperCase();
+    const own = normaliseLabel($(el).clone().children().remove().end().text());
     if (own !== 'FREE FLOAT') return;
-    const sib = $(el).parent().next().text().trim();
-    const num = parseNumber(sib);
-    if (num != null) freeFloatCandidates.push(num);
+    // Look at siblings, parent siblings, and nested cells for the value.
+    const $el = $(el);
+    const candidates = [
+      $el.next().text().trim(),
+      $el.parent().next().text().trim(),
+      $el.parent().find('*').filter((_, x) => /\d/.test($(x).text().trim()) && $(x).text().trim().length < 40).first().text().trim(),
+    ].filter((v) => v && /\d/.test(v));
+    for (const c of candidates) {
+      if (!freeFloatCandidates.includes(c)) freeFloatCandidates.push(c);
+    }
   });
+
   let freeFloatShares: number | null = null;
   let freeFloatPercent: number | null = null;
-  for (const n of freeFloatCandidates) {
-    if (n > 1_000_000 && freeFloatShares == null) freeFloatShares = n;
-    else if (n >= 0 && n <= 100 && freeFloatPercent == null) freeFloatPercent = n;
+  for (const raw of freeFloatCandidates) {
+    const parsed = parseNumber(raw);
+    if (parsed == null) continue;
+    if (/,/.test(raw) || parsed > 100) {
+      if (freeFloatShares == null) freeFloatShares = parsed;
+    } else if (parsed >= 0 && parsed <= 100) {
+      if (freeFloatPercent == null) freeFloatPercent = parsed;
+    }
   }
 
   // Company profile.
