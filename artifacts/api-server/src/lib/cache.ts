@@ -52,7 +52,12 @@ class TtlCache {
 
 export const psxCache = new TtlCache();
 
+// Redis L2. When REDIS_URL is unset, all three helpers no-op and this reduces
+// to the in-memory-only behavior we had before.
+import { redisGetFresh, redisGetStale, redisSet } from './redis-cache';
+
 export async function withCache<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+  // L1 (in-memory) hit — fastest path.
   const cached = psxCache.get<T>(key);
   if (cached !== undefined) return cached;
 
@@ -62,13 +67,27 @@ export async function withCache<T>(key: string, ttlMs: number, fn: () => Promise
   if (inflight) return inflight;
 
   const promise = (async () => {
+    // L2 (Redis) hit — survives process restarts/deploys.
+    const l2Fresh = await redisGetFresh<T>(key);
+    if (l2Fresh !== undefined) {
+      // Warm the L1 for future in-process reads.
+      psxCache.set(key, l2Fresh, ttlMs);
+      return l2Fresh;
+    }
     try {
       const value = await fn();
       psxCache.set(key, value, ttlMs);
+      redisSet(key, value, ttlMs); // fire-and-forget
       return value;
     } catch (err) {
-      const stale = psxCache.getStale<T>(key);
-      if (stale !== undefined) return stale;
+      // Fallback to L1 stale, then L2 stale.
+      const memStale = psxCache.getStale<T>(key);
+      if (memStale !== undefined) return memStale;
+      const redisStale = await redisGetStale<T>(key);
+      if (redisStale !== undefined) {
+        psxCache.set(key, redisStale, ttlMs);
+        return redisStale;
+      }
       throw err;
     }
   })();
