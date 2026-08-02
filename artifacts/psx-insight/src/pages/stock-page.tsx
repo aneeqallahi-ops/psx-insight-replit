@@ -180,8 +180,8 @@ function StockHeader({ symbol, tick, updatedAt, isMarketOpen, marketStatusLabel 
         <div className="grid gap-3 sm:grid-cols-3 lg:min-w-[440px]">
           {tick?.high != null ? <Metric label="High" value={tick.high.toFixed(2)} /> : null}
           {tick?.low != null ? <Metric label="Low" value={tick.low.toFixed(2)} /> : null}
-          <Metric label="Volume" value={tick ? compactNumber(tick.volume) : '--'} />
-          <Metric label="Value" value={tick && tick.value ? compactNumber(tick.value) : '--'} />
+          <Metric label="Volume (shares)" value={tick ? compactNumber(tick.volume) : '--'} />
+          <Metric label="Turnover (PKR)" value={tick && tick.value ? compactNumber(tick.value) : '--'} />
           <Metric label="Trades" value={tick?.trades ? compactNumber(tick.trades) : '--'} />
         </div>
       </div>

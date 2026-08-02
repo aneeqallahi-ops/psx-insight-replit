@@ -85,7 +85,13 @@ function parsePayoutsHtml(symbol: string, html: string): Dividend[] {
     const exDate = parseDMY(bookRangeMatch?.[1]);
     const recordDate = parseDMY(bookRangeMatch?.[2]);
     const paymentDate = parseLongDate(row.postedDate);
-    const year = extractFinancialYear(row.financialResults) ?? new Date().getFullYear();
+    // Year = the year the dividend was declared (matches user expectation).
+    // Fall back to book-closure year, then fiscal year from the results column.
+    const year =
+      (paymentDate && Number(paymentDate.slice(0, 4))) ||
+      (exDate && Number(exDate.slice(0, 4))) ||
+      extractFinancialYear(row.financialResults) ||
+      new Date().getFullYear();
 
     dividends.push({
       symbol,
