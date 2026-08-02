@@ -4,7 +4,24 @@ import { describeMarketStatusFromSchedule } from '../lib/market-status';
 import { answerIntradayQuestion } from '../lib/agent/intraday-qa';
 import { checkIpLimit } from '../lib/ip-rate-limit';
 import { sseSetup, sseSend } from '../lib/sse';
-import type { Fundamentals, MarketState, MarketStats, Timeframe } from '../lib/types';
+import { getMarketRows, type MarketRow } from '../lib/psx-portal';
+import type { Fundamentals, MarketState, MarketStats, Timeframe, Tick } from '../lib/types';
+
+function tickFromMarketRow(row: MarketRow): Tick {
+  const schedule = describeMarketStatusFromSchedule();
+  return {
+    symbol: row.symbol,
+    market: 'REG',
+    st: schedule.isOpen ? 'OPN' : 'CLS',
+    price: row.price,
+    change: row.change,
+    changePercent: row.changePercent,
+    volume: row.volume,
+    trades: 0,
+    value: row.value,
+    timestamp: Date.now(),
+  };
+}
 
 const router = Router();
 const timeframes = new Set<Timeframe>(['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M']);
@@ -101,9 +118,27 @@ router.get('/stock/detail', async (req, res) => {
       }
     }
 
-    const syntheticTick = fund
+    let syntheticTick: Tick | null = fund
       ? buildSyntheticTick(symbol, fund, statsData, klineHigh, klineLow)
       : null;
+
+    // Fallback: if psxterminal fundamentals failed, look the symbol up in the
+    // PSX portal Market Watch snapshot we already scrape for the dashboard.
+    // That gives us real price / change / volume / value even when the primary
+    // upstream is unreachable.
+    let portalFallbackUsed = false;
+    if (!syntheticTick) {
+      try {
+        const rows = await getMarketRows();
+        const row = rows.find((r) => r.symbol === symbol);
+        if (row) {
+          syntheticTick = tickFromMarketRow(row);
+          portalFallbackUsed = true;
+        }
+      } catch {
+        // Portal is also down — nothing more we can do.
+      }
+    }
 
     // Surface upstream failures as a soft warning so the page still renders
     // with whatever partial data we did get, instead of a hard 502.
@@ -113,9 +148,11 @@ router.get('/stock/detail', async (req, res) => {
       dividendsR.status === 'rejected' ? `dividends: ${String(dividendsR.reason)}` : null,
       klinesR.status === 'rejected' ? `klines: ${String(klinesR.reason)}` : null,
     ].filter(Boolean);
-    const warning = !fund && !klineData.length && rejections.length > 0
+    const warning = !syntheticTick && rejections.length > 0
       ? `Upstream data source is temporarily unavailable (${rejections.join('; ')})`
-      : undefined;
+      : portalFallbackUsed
+        ? 'Primary data source unavailable — showing last snapshot from PSX portal.'
+        : undefined;
 
     res.json({
       tick: syntheticTick,
@@ -146,17 +183,34 @@ router.get('/stock/tick', async (req, res) => {
       PSXApi.getStats('REG'),
     ]);
 
-    if (fundamentalsR.status === 'rejected') {
-      throw fundamentalsR.reason instanceof Error
-        ? fundamentalsR.reason
-        : new Error(String(fundamentalsR.reason));
-    }
-    const fund = fundamentalsR.value;
     const statsData =
       statsR.status === 'fulfilled' && isMarketStats(statsR.value) ? statsR.value : null;
 
-    const tick = buildSyntheticTick(symbol, fund, statsData);
-    res.json({ tick, updatedAt: Date.now() });
+    if (fundamentalsR.status === 'fulfilled') {
+      const tick = buildSyntheticTick(symbol, fundamentalsR.value, statsData);
+      res.json({ tick, updatedAt: Date.now() });
+      return;
+    }
+
+    // Fallback to PSX portal Market Watch snapshot.
+    try {
+      const rows = await getMarketRows();
+      const row = rows.find((r) => r.symbol === symbol);
+      if (row) {
+        res.json({
+          tick: tickFromMarketRow(row),
+          updatedAt: Date.now(),
+          warning: 'Primary data source unavailable — showing PSX portal snapshot.',
+        });
+        return;
+      }
+    } catch {
+      // fall through to error
+    }
+
+    throw fundamentalsR.reason instanceof Error
+      ? fundamentalsR.reason
+      : new Error(String(fundamentalsR.reason));
   } catch (error) {
     res
       .status(502)
