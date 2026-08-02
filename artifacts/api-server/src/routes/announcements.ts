@@ -111,7 +111,17 @@ router.get('/announcements', async (req, res) => {
       updatedAt: Date.now(),
     });
   } catch (error) {
-    res.status(502).json({ error: error instanceof Error ? error.message : 'Unable to load announcements' });
+    // Announcements upstream is flaky — return an empty result with a warning
+    // so the Events page renders instead of showing a hard error banner.
+    res.json({
+      symbol: symbol ?? null,
+      page,
+      limit,
+      pagination: null,
+      items: [],
+      updatedAt: Date.now(),
+      warning: error instanceof Error ? error.message : 'Announcements upstream is temporarily unavailable',
+    });
   }
 });
 
