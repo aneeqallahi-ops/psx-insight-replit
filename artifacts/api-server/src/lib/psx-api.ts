@@ -27,7 +27,7 @@ async function fetchPSX<T>(path: string, retries = 2): Promise<T> {
     try {
       const res = await fetch(`${BASE_URL}${path}`, {
         headers: DEFAULT_HEADERS,
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!res.ok) throw new Error(`PSX API error: ${res.status} on ${path}`);
       const json = (await res.json()) as { success: boolean; data: T };
@@ -48,7 +48,7 @@ async function fetchStatus(): Promise<{ status: string; timestamp: string; uptim
     try {
       const res = await fetch(`${BASE_URL}/api/status`, {
         headers: DEFAULT_HEADERS,
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!res.ok) throw new Error(`PSX status error: ${res.status}`);
       return await res.json() as { status: string; timestamp: string; uptime: number };
@@ -116,7 +116,7 @@ export const PSXApi = {
         try {
           const res = await fetch(`${BASE_URL}${path}`, {
             headers: DEFAULT_HEADERS,
-            signal: AbortSignal.timeout(10_000),
+            signal: AbortSignal.timeout(25_000),
           });
           if (!res.ok) throw new Error(`PSX announcements error: ${res.status}`);
           return await res.json() as AnnouncementsResponse;
