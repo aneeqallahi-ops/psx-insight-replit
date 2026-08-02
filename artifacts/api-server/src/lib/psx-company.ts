@@ -226,17 +226,30 @@ function parseCompanyHtml(symbol: string, html: string): PsxCompanyData {
   const [yearLow, yearHigh] = extractRange(yearRangeRaw);
 
   // Current price + change usually shown near the company name, not as
-  // labelled fields. Look for "Rs.<price>" and the "(+/-x.xx%)" sibling.
+  // labelled fields. Look for "Rs.<price>" and then the change/% pattern
+  // that follows it (within a short window). This avoids matching the
+  // header ticker's "X.XX (Y.YY%)" values from other symbols on the page.
   let price: number | null = null;
   let change: number | null = null;
   let changePercent: number | null = null;
-  const priceText = $('body').text().match(/Rs\.?\s*([\d,]+\.?\d*)/);
-  if (priceText) price = parseNumber(priceText[1]);
-  const changeMatch = $('body').text().match(/([+\-]?\d+\.\d+)\s*\(([+\-]?\d+\.\d+)%\)/);
-  if (changeMatch) {
-    change = parseNumber(changeMatch[1]);
-    changePercent = parseNumber(changeMatch[2]);
-    if (changePercent != null) changePercent = changePercent / 100;
+  const bodyText = $('body').text();
+  const priceMatch = bodyText.match(/Rs\.?\s*([\d,]+\.?\d*)/);
+  if (priceMatch) {
+    price = parseNumber(priceMatch[1]);
+    // Search for the change% pattern in the ~300 chars after the price.
+    const start = priceMatch.index ?? 0;
+    const nearby = bodyText.substring(start, start + 300);
+    const changeMatch = nearby.match(/([+\-−]?\d+(?:\.\d+)?)\s*\(([+\-−]?\d+(?:\.\d+)?)\s*%\)/);
+    if (changeMatch) {
+      const sign = changeMatch[2].startsWith('-') || changeMatch[2].startsWith('−') ? -1 : 1;
+      const pctRaw = Number(changeMatch[2].replace(/[−\-+]/g, ''));
+      changePercent = Number.isFinite(pctRaw) ? (sign * pctRaw) / 100 : null;
+    }
+    // Compute change from price × changePercent (more reliable than the
+    // scraped text, which we've seen pick up index-ticker numbers).
+    if (price != null && changePercent != null) {
+      change = +(price * changePercent).toFixed(2);
+    }
   }
 
   // Equity profile.
@@ -358,14 +371,19 @@ export function toFundamentals(data: PsxCompanyData): Fundamentals {
   };
 }
 
+function formatWithCommas(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return '';
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
+}
+
 // Map to the existing CompanyInfo shape.
 export function toCompanyInfo(data: PsxCompanyData): CompanyInfo {
   return {
     symbol: data.symbol,
     financialStats: {
-      marketCap: { raw: data.marketCap != null ? String(data.marketCap) : '', numeric: data.marketCap ?? 0 },
-      shares: { raw: data.sharesOutstanding != null ? String(data.sharesOutstanding) : '', numeric: data.sharesOutstanding ?? 0 },
-      freeFloat: { raw: data.freeFloatShares != null ? String(data.freeFloatShares) : '', numeric: data.freeFloatShares ?? 0 },
+      marketCap: { raw: formatWithCommas(data.marketCap), numeric: data.marketCap ?? 0 },
+      shares: { raw: formatWithCommas(data.sharesOutstanding), numeric: data.sharesOutstanding ?? 0 },
+      freeFloat: { raw: formatWithCommas(data.freeFloatShares), numeric: data.freeFloatShares ?? 0 },
       freeFloatPercent: { raw: data.freeFloatPercent != null ? `${data.freeFloatPercent}%` : '', numeric: data.freeFloatPercent ?? 0 },
     },
     businessDescription: data.businessDescription ?? '',
