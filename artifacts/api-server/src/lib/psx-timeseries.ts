@@ -7,6 +7,7 @@
 
 import type { Kline, Timeframe } from './types';
 import { withCache, TTL } from './cache';
+import { portalFetch } from './psx-http';
 
 const DPS_BASE_URL = process.env.PSX_DPS_BASE_URL || 'https://dps.psx.com.pk';
 
@@ -23,25 +24,16 @@ interface TimeseriesResponse {
 }
 
 async function fetchTimeseriesJson(path: string): Promise<(number | string)[][]> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetch(`${DPS_BASE_URL}${path}`, {
-        headers: REQUEST_HEADERS,
-        signal: AbortSignal.timeout(20_000),
-      });
-      if (!res.ok) throw new Error(`PSX timeseries ${path} error: ${res.status}`);
-      const json = (await res.json()) as TimeseriesResponse;
-      if (json.status !== 1 || !Array.isArray(json.data)) {
-        throw new Error(`PSX timeseries ${path} invalid response`);
-      }
-      return json.data;
-    } catch (err) {
-      lastError = err;
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
-    }
+  const res = await portalFetch(`${DPS_BASE_URL}${path}`, {
+    headers: REQUEST_HEADERS,
+    timeoutMs: 20_000,
+  });
+  if (!res.ok) throw new Error(`PSX timeseries ${path} error: ${res.status}`);
+  const json = (await res.json()) as TimeseriesResponse;
+  if (json.status !== 1 || !Array.isArray(json.data)) {
+    throw new Error(`PSX timeseries ${path} invalid response`);
   }
-  throw lastError;
+  return json.data;
 }
 
 function toNumber(v: number | string | undefined): number {

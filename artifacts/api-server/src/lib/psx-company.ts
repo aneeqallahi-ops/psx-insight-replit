@@ -7,6 +7,7 @@
 import * as cheerio from 'cheerio';
 import type { CompanyInfo, Fundamentals } from './types';
 import { withCache } from './cache';
+import { portalFetch } from './psx-http';
 
 const DPS_BASE_URL = process.env.PSX_DPS_BASE_URL || 'https://dps.psx.com.pk';
 
@@ -330,21 +331,12 @@ function parseCompanyHtml(symbol: string, html: string): PsxCompanyData {
 }
 
 async function fetchCompanyPage(symbol: string): Promise<PsxCompanyData> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetch(`${DPS_BASE_URL}/company/${encodeURIComponent(symbol)}`, {
-        headers: REQUEST_HEADERS,
-        signal: AbortSignal.timeout(20_000),
-      });
-      if (!res.ok) throw new Error(`PSX company page error for ${symbol}: ${res.status}`);
-      return parseCompanyHtml(symbol, await res.text());
-    } catch (err) {
-      lastError = err;
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
-    }
-  }
-  throw lastError;
+  const res = await portalFetch(`${DPS_BASE_URL}/company/${encodeURIComponent(symbol)}`, {
+    headers: REQUEST_HEADERS,
+    timeoutMs: 20_000,
+  });
+  if (!res.ok) throw new Error(`PSX company page error for ${symbol}: ${res.status}`);
+  return parseCompanyHtml(symbol, await res.text());
 }
 
 export function getCompanyData(symbol: string): Promise<PsxCompanyData> {

@@ -9,6 +9,7 @@
 import * as cheerio from 'cheerio';
 import type { Announcement } from './types';
 import { withCache, TTL } from './cache';
+import { portalFetch } from './psx-http';
 
 const DPS_BASE_URL = process.env.PSX_DPS_BASE_URL || 'https://dps.psx.com.pk';
 
@@ -165,23 +166,14 @@ async function fetchAnnouncementsPage(q: PsxAnnouncementQuery): Promise<ParsedRo
   body.set('date_to', q.dateTo ?? '');
   body.set('page', 'annc');
 
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetch(`${DPS_BASE_URL}/announcements`, {
-        method: 'POST',
-        headers: REQUEST_HEADERS,
-        body: body.toString(),
-        signal: AbortSignal.timeout(20_000),
-      });
-      if (!res.ok) throw new Error(`PSX announcements POST error: ${res.status}`);
-      return parseAnnouncementRows(await res.text());
-    } catch (err) {
-      lastError = err;
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-    }
-  }
-  throw lastError;
+  const res = await portalFetch(`${DPS_BASE_URL}/announcements`, {
+    method: 'POST',
+    headers: REQUEST_HEADERS,
+    body: body.toString(),
+    timeoutMs: 20_000,
+  });
+  if (!res.ok) throw new Error(`PSX announcements POST error: ${res.status}`);
+  return parseAnnouncementRows(await res.text());
 }
 
 /**

@@ -6,6 +6,7 @@ interface CacheEntry<T> {
 class TtlCache {
   private store = new Map<string, CacheEntry<unknown>>();
   private staleStore = new Map<string, unknown>();
+  private pending = new Map<string, Promise<unknown>>();
 
   get<T>(key: string): T | undefined {
     const entry = this.store.get(key);
@@ -26,6 +27,19 @@ class TtlCache {
     this.staleStore.set(key, value);
   }
 
+  getPending<T>(key: string): Promise<T> | undefined {
+    return this.pending.get(key) as Promise<T> | undefined;
+  }
+
+  setPending<T>(key: string, promise: Promise<T>): void {
+    this.pending.set(key, promise);
+    // Always clear the pending entry after the promise settles so a later
+    // caller can trigger a fresh fetch (subject to TTL).
+    promise.finally(() => {
+      if (this.pending.get(key) === promise) this.pending.delete(key);
+    });
+  }
+
   delete(key: string): void {
     this.store.delete(key);
     this.staleStore.delete(key);
@@ -41,15 +55,26 @@ export const psxCache = new TtlCache();
 export async function withCache<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
   const cached = psxCache.get<T>(key);
   if (cached !== undefined) return cached;
-  try {
-    const value = await fn();
-    psxCache.set(key, value, ttlMs);
-    return value;
-  } catch (err) {
-    const stale = psxCache.getStale<T>(key);
-    if (stale !== undefined) return stale;
-    throw err;
-  }
+
+  // In-flight dedup: if another caller is already fetching this key, wait
+  // for their result instead of triggering a duplicate upstream request.
+  const inflight = psxCache.getPending<T>(key);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    try {
+      const value = await fn();
+      psxCache.set(key, value, ttlMs);
+      return value;
+    } catch (err) {
+      const stale = psxCache.getStale<T>(key);
+      if (stale !== undefined) return stale;
+      throw err;
+    }
+  })();
+
+  psxCache.setPending(key, promise);
+  return promise;
 }
 
 export const TTL = {

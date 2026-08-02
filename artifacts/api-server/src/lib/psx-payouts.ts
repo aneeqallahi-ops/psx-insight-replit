@@ -7,6 +7,7 @@
 import * as cheerio from 'cheerio';
 import type { Dividend } from './types';
 import { withCache, TTL } from './cache';
+import { portalFetch } from './psx-http';
 
 const DPS_BASE_URL = process.env.PSX_DPS_BASE_URL || 'https://dps.psx.com.pk';
 
@@ -111,28 +112,19 @@ async function fetchPayoutsHtml(symbol: string): Promise<Dividend[]> {
   // The portal fetches this fragment via POST to /company/payouts with the
   // symbol as form data (same pattern as /announcements).
   const body = new URLSearchParams({ symbol: upper }).toString();
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetch(`${DPS_BASE_URL}/company/payouts`, {
-        method: 'POST',
-        headers: {
-          ...REQUEST_HEADERS,
-          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          Origin: DPS_BASE_URL,
-          Referer: `${DPS_BASE_URL}/company/${upper}`,
-        },
-        body,
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!res.ok) throw new Error(`PSX payouts error for ${upper}: ${res.status}`);
-      return parsePayoutsHtml(upper, await res.text());
-    } catch (err) {
-      lastError = err;
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
-    }
-  }
-  throw lastError;
+  const res = await portalFetch(`${DPS_BASE_URL}/company/payouts`, {
+    method: 'POST',
+    headers: {
+      ...REQUEST_HEADERS,
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      Origin: DPS_BASE_URL,
+      Referer: `${DPS_BASE_URL}/company/${upper}`,
+    },
+    body,
+    timeoutMs: 15_000,
+  });
+  if (!res.ok) throw new Error(`PSX payouts error for ${upper}: ${res.status}`);
+  return parsePayoutsHtml(upper, await res.text());
 }
 
 export function getPayouts(symbol: string): Promise<Dividend[]> {
