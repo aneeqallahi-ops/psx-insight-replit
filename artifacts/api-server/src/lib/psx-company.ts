@@ -20,6 +20,21 @@ const REQUEST_HEADERS = {
 // ~5-minute delayed so 60s is more than enough.
 const COMPANY_TTL_MS = 60_000;
 
+export interface PsxFinancialRow {
+  year: number;
+  markupEarned: number | null;
+  totalIncome: number | null;
+  profitAfterTax: number | null;
+  eps: number | null;
+}
+
+export interface PsxRatioRow {
+  year: number;
+  netProfitMargin: number | null;
+  epsGrowth: number | null;
+  peg: number | null;
+}
+
 export interface PsxCompanyData {
   symbol: string;
   companyName: string | null;
@@ -40,9 +55,10 @@ export interface PsxCompanyData {
   yearHigh: number | null;
   yearLow: number | null;
   businessDescription: string | null;
-  keyPeople: { name: string; position: string }[];
   fiscalYearEnd: string | null;
   website: string | null;
+  financials: PsxFinancialRow[];
+  ratios: PsxRatioRow[];
   fetchedAt: number;
 }
 
@@ -111,24 +127,78 @@ function extractRange(raw: string | null): [number | null, number | null] {
   return [parseNumber(parts[0]), parseNumber(parts[1])];
 }
 
-function parseKeyPeople($: cheerio.CheerioAPI): { name: string; position: string }[] {
-  const people: { name: string; position: string }[] = [];
-  // "KEY PEOPLE" section renders as a small table with 2 columns.
-  $('h1, h2, h3, h4, strong, b').each((_, el) => {
-    const label = $(el).text().trim().toUpperCase();
-    if (!label.includes('KEY PEOPLE')) return true;
-    const container = $(el).closest('div, section, article');
-    container.find('table tr').each((_, tr) => {
-      const cells = $(tr).find('td');
-      if (cells.length >= 2) {
-        const name = cells.eq(0).text().trim();
-        const position = cells.eq(1).text().trim();
-        if (name && position) people.push({ name, position });
-      }
+// Find a table whose header contains a specific label ("Profit after Taxation",
+// "Net Profit Margin", etc.) and return its rows as label → [values by column].
+// The first row of PSX's financial tables is year headers ("2025 2024 2023 2022").
+function findLabeledTable($: cheerio.CheerioAPI, rowLabel: string): { years: number[]; rows: Map<string, (number | null)[]> } | null {
+  let match: { years: number[]; rows: Map<string, (number | null)[]> } | null = null;
+  $('table').each((_, table) => {
+    if (match) return false;
+    const $table = $(table);
+    const bodyText = $table.text();
+    if (!bodyText.toUpperCase().includes(rowLabel.toUpperCase())) return true;
+
+    // Extract year headers (numeric 4-digit values in the header row).
+    const years: number[] = [];
+    $table.find('tr').first().find('th, td').each((_, cell) => {
+      const val = $(cell).text().trim();
+      if (/^\d{4}$/.test(val)) years.push(Number(val));
     });
+    if (years.length === 0) return true;
+
+    const rows = new Map<string, (number | null)[]>();
+    $table.find('tr').each((_, tr) => {
+      const cells = $(tr).find('td, th');
+      if (cells.length < 2) return;
+      const label = cells.eq(0).text().trim();
+      if (!label) return;
+      const values: (number | null)[] = [];
+      for (let i = 1; i < cells.length && i - 1 < years.length; i++) {
+        values.push(parseNumber(cells.eq(i).text()));
+      }
+      if (values.some((v) => v !== null)) rows.set(label, values);
+    });
+    match = { years, rows };
     return false;
   });
-  return people;
+  return match;
+}
+
+function findRow(rows: Map<string, (number | null)[]>, pattern: RegExp): (number | null)[] | null {
+  for (const [label, values] of rows) {
+    if (pattern.test(label)) return values;
+  }
+  return null;
+}
+
+function parseFinancials($: cheerio.CheerioAPI): PsxFinancialRow[] {
+  const table = findLabeledTable($, 'Profit after Taxation');
+  if (!table) return [];
+  const markup = findRow(table.rows, /mark[-\s]?up\s+earned|revenue|net\s+sales|total\s+revenue/i);
+  const totalIncome = findRow(table.rows, /total\s+income/i);
+  const profit = findRow(table.rows, /profit\s+after\s+tax/i);
+  const eps = findRow(table.rows, /^EPS$/i);
+  return table.years.map((year, i) => ({
+    year,
+    markupEarned: markup?.[i] ?? null,
+    totalIncome: totalIncome?.[i] ?? null,
+    profitAfterTax: profit?.[i] ?? null,
+    eps: eps?.[i] ?? null,
+  }));
+}
+
+function parseRatios($: cheerio.CheerioAPI): PsxRatioRow[] {
+  const table = findLabeledTable($, 'Net Profit Margin');
+  if (!table) return [];
+  const npm = findRow(table.rows, /net\s+profit\s+margin/i);
+  const epsGrowth = findRow(table.rows, /EPS\s+growth/i);
+  const peg = findRow(table.rows, /^PEG$/i);
+  return table.years.map((year, i) => ({
+    year,
+    netProfitMargin: npm?.[i] ?? null,
+    epsGrowth: epsGrowth?.[i] ?? null,
+    peg: peg?.[i] ?? null,
+  }));
 }
 
 function parseCompanyHtml(symbol: string, html: string): PsxCompanyData {
@@ -238,9 +308,10 @@ function parseCompanyHtml(symbol: string, html: string): PsxCompanyData {
     yearHigh,
     yearLow,
     businessDescription,
-    keyPeople: parseKeyPeople($),
     fiscalYearEnd,
     website,
+    financials: parseFinancials($),
+    ratios: parseRatios($),
     fetchedAt: Date.now(),
   };
 }
@@ -298,6 +369,6 @@ export function toCompanyInfo(data: PsxCompanyData): CompanyInfo {
       freeFloatPercent: { raw: data.freeFloatPercent != null ? `${data.freeFloatPercent}%` : '', numeric: data.freeFloatPercent ?? 0 },
     },
     businessDescription: data.businessDescription ?? '',
-    keyPeople: data.keyPeople,
+    keyPeople: [],
   };
 }

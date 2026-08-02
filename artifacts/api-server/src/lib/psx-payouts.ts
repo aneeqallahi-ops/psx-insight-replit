@@ -102,14 +102,21 @@ function parsePayoutsHtml(symbol: string, html: string): Dividend[] {
 
 async function fetchPayoutsHtml(symbol: string): Promise<Dividend[]> {
   const upper = symbol.toUpperCase();
-  // Portal fetches this fragment from a `payouts` endpoint under the company
-  // scope. Try the canonical path; retry on transient failures.
-  const path = `/company/payouts/${encodeURIComponent(upper)}`;
+  // The portal fetches this fragment via POST to /company/payouts with the
+  // symbol as form data (same pattern as /announcements).
+  const body = new URLSearchParams({ symbol: upper }).toString();
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(`${DPS_BASE_URL}${path}`, {
-        headers: REQUEST_HEADERS,
+      const res = await fetch(`${DPS_BASE_URL}/company/payouts`, {
+        method: 'POST',
+        headers: {
+          ...REQUEST_HEADERS,
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          Origin: DPS_BASE_URL,
+          Referer: `${DPS_BASE_URL}/company/${upper}`,
+        },
+        body,
         signal: AbortSignal.timeout(15_000),
       });
       if (!res.ok) throw new Error(`PSX payouts error for ${upper}: ${res.status}`);

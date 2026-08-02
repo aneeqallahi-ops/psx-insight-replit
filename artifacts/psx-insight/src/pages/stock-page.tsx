@@ -21,6 +21,20 @@ import { CorporateCalendar } from '@/components/corporate-calendar';
 import { useMarketStatus } from '@/hooks/useMarketStatus';
 import type { CompanyInfo, Dividend, Fundamentals, Kline, Tick, Timeframe } from '@/lib/types';
 
+interface FinancialRow {
+  year: number;
+  markupEarned: number | null;
+  totalIncome: number | null;
+  profitAfterTax: number | null;
+  eps: number | null;
+}
+interface RatioRow {
+  year: number;
+  netProfitMargin: number | null;
+  epsGrowth: number | null;
+  peg: number | null;
+}
+
 interface StockDetailResponse {
   tick: Tick;
   fundamentals: Fundamentals;
@@ -29,6 +43,8 @@ interface StockDetailResponse {
   klines: Kline[];
   timeframe: Timeframe;
   updatedAt: number;
+  financials?: FinancialRow[];
+  ratios?: RatioRow[];
 }
 
 interface TickResponse {
@@ -283,14 +299,10 @@ function buildFundamentalInsights(fundamentals?: Fundamentals, company?: Company
   const impliedDps = price && dividendYield ? price * (dividendYield / 100) : 0;
   const snapshot = fundamentals?.timestamp ? `Snapshot: ${new Date(fundamentals.timestamp).toLocaleString()}` : 'Latest fundamentals snapshot from the PSX API';
   return [
-    { id: 'peRatio', label: 'P/E Ratio', value: fundamentals ? commaNumber(fundamentals.peRatio) : '--', duration: 'Latest trailing earnings basis', source: '/api/fundamentals/{symbol}', detail: 'Price-to-earnings compares current price with the earnings figure used by the PSX fundamentals feed.', inputs: [{ label: 'Current price', value: fundamentals ? pkr(price) : '--' }, { label: 'P/E ratio', value: fundamentals ? commaNumber(peRatio) : '--' }, { label: 'Implied EPS', value: fundamentals && impliedEps ? pkr(impliedEps) : '--' }, { label: 'Data timestamp', value: snapshot }] },
-    { id: 'dividendYield', label: 'Dividend Yield', value: fundamentals ? plainPercent(fundamentals.dividendYield) : '--', duration: 'Latest trailing dividend yield', source: '/api/fundamentals/{symbol}', detail: 'Dividend yield is reported by the fundamentals feed as a percentage of price.', inputs: [{ label: 'Current price', value: fundamentals ? pkr(price) : '--' }, { label: 'Yield', value: fundamentals ? plainPercent(dividendYield) : '--' }, { label: 'Implied annual dividend/share', value: fundamentals && impliedDps ? pkr(impliedDps) : '--' }, { label: 'Data timestamp', value: snapshot }] },
-    { id: 'marketCap', label: 'Market Cap', value: fundamentals?.marketCap ?? '--', duration: 'Current price based company size', source: '/api/fundamentals/{symbol}', detail: 'Market capitalization is the company value figure exposed by the fundamentals feed.', inputs: [{ label: 'Market cap', value: fundamentals?.marketCap ?? '--' }, { label: 'Company market cap', value: company?.financialStats.marketCap.raw ?? '--' }, { label: 'Shares outstanding', value: company?.financialStats.shares.raw ?? '--' }] },
-    { id: 'yearChange', label: '1-Year Change %', value: fundamentals ? plainPercent(fundamentals.yearChange) : '--', duration: 'Trailing 12 months', source: '/api/fundamentals/{symbol}', detail: 'This is the one-year price change percentage reported by the fundamentals endpoint.', inputs: [{ label: '1-year change', value: fundamentals ? plainPercent(fundamentals.yearChange) : '--' }, { label: 'Data timestamp', value: snapshot }] },
-    { id: 'volume30Avg', label: '30-Day Avg Volume', value: fundamentals ? compactNumber(fundamentals.volume30Avg) : '--', duration: 'Last 30 trading days', source: '/api/fundamentals/{symbol}', detail: 'Average traded volume over the last 30 sessions as reported by the fundamentals feed.', inputs: [{ label: '30-day average volume', value: fundamentals ? commaNumber(fundamentals.volume30Avg) : '--' }, { label: 'Data timestamp', value: snapshot }] },
-    { id: 'freeFloat', label: 'Free Float', value: fundamentals?.freeFloat ?? '--', duration: 'Latest company profile snapshot', source: '/api/fundamentals/{symbol}', detail: 'Free float is the portion of shares generally available for public trading.', inputs: [{ label: 'Fundamentals free float', value: fundamentals?.freeFloat ?? '--' }, { label: 'Free float shares', value: company?.financialStats.freeFloat.raw ?? '--' }, { label: 'Free float percent', value: company?.financialStats.freeFloatPercent.raw ?? '--' }] },
-    { id: 'listedIn', label: 'Listed In', value: fundamentals?.listedIn?.replace(/,/g, ', ') || '--', duration: 'Current index membership snapshot', source: '/api/fundamentals/{symbol}', detail: 'Shows the PSX indices and lists where this symbol appears.', inputs: [{ label: 'Listed in', value: fundamentals?.listedIn?.replace(/,/g, ', ') || '--' }] },
-    { id: 'sector', label: 'Sector', value: fundamentals?.sector || '--', duration: 'Current sector classification snapshot', source: '/api/fundamentals/{symbol}', detail: 'Sector classification as returned by the fundamentals feed.', inputs: [{ label: 'Sector', value: fundamentals?.sector || '--' }] },
+    { id: 'peRatio', label: 'P/E Ratio', value: fundamentals && fundamentals.peRatio ? commaNumber(fundamentals.peRatio) : '--', duration: 'Latest trailing earnings basis', source: 'dps.psx.com.pk/company/{symbol}', detail: 'Price-to-earnings from PSX Data Portal quote block.', inputs: [{ label: 'Current price', value: fundamentals ? pkr(price) : '--' }, { label: 'P/E ratio', value: fundamentals && peRatio ? commaNumber(peRatio) : '--' }, { label: 'Implied EPS', value: fundamentals && impliedEps ? pkr(impliedEps) : '--' }, { label: 'Data timestamp', value: snapshot }] },
+    { id: 'marketCap', label: 'Market Cap', value: company?.financialStats.marketCap.raw || '--', duration: 'Current company size', source: 'dps.psx.com.pk/company/{symbol}', detail: 'Market capitalization from PSX Data Portal equity profile.', inputs: [{ label: 'Market cap', value: company?.financialStats.marketCap.raw ?? '--' }, { label: 'Shares outstanding', value: company?.financialStats.shares.raw ?? '--' }] },
+    { id: 'volume30Avg', label: '30-Day Avg Volume', value: fundamentals ? compactNumber(fundamentals.volume30Avg) : '--', duration: 'Last 30 trading days', source: 'dps.psx.com.pk/company/{symbol}', detail: 'Average traded volume from the PSX Data Portal quote block.', inputs: [{ label: '30-day average volume', value: fundamentals ? commaNumber(fundamentals.volume30Avg) : '--' }, { label: 'Data timestamp', value: snapshot }] },
+    { id: 'freeFloat', label: 'Free Float', value: company?.financialStats.freeFloat.raw || '--', duration: 'Latest company profile snapshot', source: 'dps.psx.com.pk/company/{symbol}', detail: 'Free float is the portion of shares generally available for public trading.', inputs: [{ label: 'Free float shares', value: company?.financialStats.freeFloat.raw ?? '--' }, { label: 'Free float percent', value: company?.financialStats.freeFloatPercent.raw ?? '--' }] },
   ];
 }
 
@@ -330,45 +342,102 @@ function CompanyInfoSection({ company }: { company?: CompanyInfo }) {
     <section className="rounded border border-line bg-panel p-6">
       <h2 className="text-lg font-semibold text-white">Company Info</h2>
       <p className="mt-4 max-w-5xl text-sm leading-7 text-gray-300">{company?.businessDescription || 'No business description available.'}</p>
-      <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_0.9fr]">
-        <div>
-          <h3 className="text-sm font-semibold text-gray-200">Key People</h3>
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[420px] border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-line text-xs uppercase text-gray-500">
-                  <th className="py-3 pr-4 font-medium">Name</th>
-                  <th className="py-3 pl-4 font-medium">Position</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(company?.keyPeople ?? []).length > 0 ? (
-                  company!.keyPeople.map((person) => (
-                    <tr key={`${person.name}-${person.position}`} className="border-b border-line/80">
-                      <td className="py-3 pr-4 font-medium text-white">{person.name}</td>
-                      <td className="py-3 pl-4 text-gray-400">{person.position}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr><td className="py-6 text-gray-500" colSpan={2}>No key people data available.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+      <div className="mt-6">
+        <h3 className="text-sm font-semibold text-gray-200">Financial Snapshot</h3>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {company ? [
+            { label: 'Market Cap', value: company.financialStats.marketCap.raw || '--' },
+            { label: 'Shares Outstanding', value: company.financialStats.shares.raw || '--' },
+            { label: 'Free Float', value: company.financialStats.freeFloat.raw || '--' },
+            { label: 'Free Float %', value: company.financialStats.freeFloatPercent.raw || '--' },
+          ].map((item) => <Metric key={item.label} label={item.label} value={item.value} />) : (
+            <p className="text-sm text-gray-500">No company financial stats available.</p>
+          )}
         </div>
+      </div>
+    </section>
+  );
+}
+
+function formatFinancialNumber(v: number | null): string {
+  if (v == null) return '--';
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(v);
+}
+
+function FinancialsTable({ financials }: { financials: FinancialRow[] }) {
+  if (financials.length === 0) return null;
+  const rows = [
+    { label: 'Mark-up Earned', key: 'markupEarned' as const },
+    { label: 'Total Income', key: 'totalIncome' as const },
+    { label: 'Profit after Taxation', key: 'profitAfterTax' as const },
+    { label: 'EPS', key: 'eps' as const },
+  ];
+  return (
+    <section className="rounded border border-line bg-panel p-6">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-gray-200">Financial Snapshot</h3>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {company ? [
-              { label: 'Market Cap', value: company.financialStats.marketCap.raw },
-              { label: 'Shares Outstanding', value: company.financialStats.shares.raw },
-              { label: 'Free Float', value: company.financialStats.freeFloat.raw },
-              { label: 'Free Float %', value: company.financialStats.freeFloatPercent.raw },
-            ].map((item) => <Metric key={item.label} label={item.label} value={item.value} />) : (
-              <p className="text-sm text-gray-500">No company financial stats available.</p>
-            )}
-          </div>
+          <h2 className="text-lg font-semibold text-white">Financials</h2>
+          <p className="mt-1 text-xs text-gray-500">All numbers in thousands (000&apos;s) except EPS · Source: PSX Data Portal</p>
         </div>
+      </div>
+      <div className="mt-5 overflow-x-auto">
+        <table className="w-full min-w-[560px] border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-line text-xs uppercase text-gray-500">
+              <th className="py-3 pr-4 font-medium"> </th>
+              {financials.map((f) => <th key={f.year} className="px-4 py-3 text-right font-medium">{f.year}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} className="border-b border-line/80">
+                <td className="py-3 pr-4 text-gray-300">{r.label}</td>
+                {financials.map((f) => (
+                  <td key={f.year} className={`px-4 py-3 text-right ${(f[r.key] ?? 0) < 0 ? 'text-rose-300' : 'text-white'}`}>
+                    {formatFinancialNumber(f[r.key])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function RatiosTable({ ratios }: { ratios: RatioRow[] }) {
+  if (ratios.length === 0) return null;
+  const rows = [
+    { label: 'Net Profit Margin (%)', key: 'netProfitMargin' as const },
+    { label: 'EPS Growth (%)', key: 'epsGrowth' as const },
+    { label: 'PEG', key: 'peg' as const },
+  ];
+  return (
+    <section className="rounded border border-line bg-panel p-6">
+      <h2 className="text-lg font-semibold text-white">Ratios</h2>
+      <p className="mt-1 text-xs text-gray-500">Source: PSX Data Portal</p>
+      <div className="mt-5 overflow-x-auto">
+        <table className="w-full min-w-[560px] border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-line text-xs uppercase text-gray-500">
+              <th className="py-3 pr-4 font-medium"> </th>
+              {ratios.map((r) => <th key={r.year} className="px-4 py-3 text-right font-medium">{r.year}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} className="border-b border-line/80">
+                <td className="py-3 pr-4 text-gray-300">{r.label}</td>
+                {ratios.map((row) => (
+                  <td key={row.year} className={`px-4 py-3 text-right ${(row[r.key] ?? 0) < 0 ? 'text-rose-300' : 'text-white'}`}>
+                    {formatFinancialNumber(row[r.key])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </section>
   );
@@ -448,6 +517,8 @@ export function StockPage() {
   const fundamentals = detailQuery.data?.fundamentals;
   const company = detailQuery.data?.company;
   const dividends = detailQuery.data?.dividends ?? [];
+  const financials = detailQuery.data?.financials ?? [];
+  const ratios = detailQuery.data?.ratios ?? [];
   const updatedAt = tickQuery.data?.updatedAt ?? detailQuery.data?.updatedAt;
 
   if (!symbol) {
@@ -485,6 +556,8 @@ export function StockPage() {
         <StockQaPanel symbol={symbol} />
         <PriceChart symbol={symbol} klines={klines} timeframe={timeframe} onTimeframeChange={setTimeframe} isLoading={klinesQuery.isFetching || detailQuery.isFetching} />
         <FundamentalsCard fundamentals={fundamentals} company={company} />
+        <FinancialsTable financials={financials} />
+        <RatiosTable ratios={ratios} />
         <CorporateCalendar symbol={symbol} />
         <CompanyInfoSection company={company} />
         <DividendsTable dividends={dividends} />

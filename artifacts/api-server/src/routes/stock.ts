@@ -203,6 +203,9 @@ router.get('/stock/detail', async (req, res) => {
       klines: klineData,
       timeframe,
       updatedAt: Date.now(),
+      // PSX portal only fields (financials + ratios tables).
+      financials: portal?.financials ?? [],
+      ratios: portal?.ratios ?? [],
       ...(warning ? { warning } : {}),
     });
   } catch (error) {
